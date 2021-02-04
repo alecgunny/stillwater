@@ -1,0 +1,4 @@
+attrs
+numpy
+tblib
+tritonclient[grpc]
