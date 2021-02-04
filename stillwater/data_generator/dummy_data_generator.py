@@ -1,10 +1,35 @@
 import time
 import typing
 
+import attr
 import numpy as np
 
 from stillwater.data_generator import DataGenerator
 from stillwater.utils import Package
+
+
+@attr.s(auto_attribs=True)
+class DummyDataGeneratorFn:
+    shape: typing.Tuple[int, ...]
+    sample_rate: typing.Optional[float]
+
+    def __attrs_post_init__(self):
+        if self.sample_rate is not None:
+            self._wait_time = self.sample_rate * self.shape[-1]
+        else:
+            self._wait_time = None
+        self._last_time = time.time()
+
+    def __call__(self, idx):
+        if (
+            self._wait_time is not None
+            and time.time() - self._last_time < self._wait_time
+        ):
+            return
+        x = np.random.randn(*self.shape)
+        package = Package(x=x, t0=time.time())
+        self._last_time = package.t0
+        return package
 
 
 class DummyDataGenerator(DataGenerator):
@@ -14,22 +39,5 @@ class DummyDataGenerator(DataGenerator):
         name: str,
         sample_rate: typing.Optional[float],
     ) -> None:
-        self.shape = shape
-
-        _wait_time = None
-        if sample_rate is not None:
-            _wait_time = sample_rate * shape[-1]
-        self._last_time = time.time()
-
-        def _generator_fn(idx):
-            if (
-                _wait_time is not None
-                and time.time() - self._last_time < _wait_time
-            ):
-                return
-            x = np.random.randn(*shape)
-            package = Package(x=x, t0=time.time())
-            self._last_time = package.t0
-            return package
-
-        super().__init__(_generator_fn, 1, name)
+        generator_fn = DummyDataGeneratorFn(shape, sample_rate)
+        super().__init__(generator_fn, 1, name)
