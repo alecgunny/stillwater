@@ -1,8 +1,12 @@
 import sys
 import time
+import typing
 from multiprocessing import Event, Process
 
 from stillwater.utils import ExceptionWrapper, Relative
+
+if typing.TYPE_CHECKING:
+    from multiprocessing.connection import Connection
 
 
 class StreamingInferenceProcess(Process):
@@ -14,19 +18,27 @@ class StreamingInferenceProcess(Process):
         self._stop_event = Event()
         super().__init__(name=name)
 
-    def add_parent(self, parent: Relative):
+    def add_parent(self, parent: Relative) -> Connection:
         if parent.process is None:
             name = None
         else:
             name = parent.process.name
-        self._parents[name] = parent.conn
+        if name in self._parents and self._parents[name] is not parent.conn:
+            raise ValueError(f"Parent {name} already has associated connection.")
+        elif name not in self._parents:
+            self._parents[name] = parent.conn
+        return parent.conn
 
-    def add_child(self, child: Relative):
+    def add_child(self, child: Relative) -> Connection:
         if child.process is None:
             name = None
         else:
             name = child.process.name
-        self._children[name] = child.conn
+        if name in self._children and self._children[name] is not child.conn:
+            raise ValueError(f"Child {name} already has associated connection.")
+        elif name not in self._children:
+            self._children[name] = child.conn
+        return child.conn
 
     @property
     def stopped(self):
@@ -57,7 +69,11 @@ class StreamingInferenceProcess(Process):
         """
         if not isinstance(exception, ExceptionWrapper):
             exception = ExceptionWrapper(exception)
+
+        # TODO: we need to figure out what's going
+        # wrong here
         print(str(exception))
+
         self.stop()
         for child in self._children.values():
             child.send(exception)

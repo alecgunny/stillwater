@@ -1,5 +1,6 @@
 import sys
 import typing
+from collections import namedtuple
 from multiprocessing import Pipe
 
 import attr
@@ -40,8 +41,24 @@ def pipe(
     parent: typing.Optional["StreamingInferenceProcess"],
     child: typing.Optional["StreamingInferenceProcess"],
 ) -> None:
-    # TODO: use none checks to do piping to
-    # main process
     parent_conn, child_conn = Pipe()
-    parent.add_child(Relative(child, child_conn))
-    child.add_parent(Relative(parent, parent_conn))
+
+    str_relative = namedtuple("Relative", ["process", "conn"])
+    if isinstance(parent, str) and isinstance(child, str):
+        raise ValueError("Must provide at least one process to pipe between")
+
+    parent_cls = str_relative if isinstance(parent, str) else Relative
+    child_cls = str_relative if isinstance(parent, str) else Relative
+
+    parent = parent_cls(parent, parent_conn)
+    child = child_cls(child, child_conn)
+    if not isinstance(parent, str_relative):
+        parent.add_child(child)
+    else:
+        conn = child.add_parent(parent)
+
+    if not isinstance(child, str_relative):
+        child.add_parent(parent)
+    else:
+        conn = parent.add_child(child)
+    return conn
