@@ -57,7 +57,10 @@ class LowLatencyFrameGeneratorFn:
 
         # return the next piece of data
         x = self.data[:, start:stop]
-        t0 = self.t0 + idx * self.kernel_stride
+
+        # constant offset due to time conventions
+        # on LLF file names
+        t0 = self.t0 + idx * self.kernel_stride + 315964794
         return Package(x=x, t0=t0)
 
 
