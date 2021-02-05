@@ -22,8 +22,8 @@ class DummyDataGeneratorFn:
 
     def __call__(self, idx):
         if (
-            self._wait_time is not None and
-            time.time() - self._last_time < self._wait_time
+            self._wait_time is not None
+            and time.time() - self._last_time < self._wait_time
         ):
             return
         x = np.random.randn(*self.shape)

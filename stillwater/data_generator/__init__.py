@@ -13,4 +13,4 @@ try:
     from .low_latency_frame_generator import LowLatencyFrameGenerator
 except ImportError as e:
     if "gwpy" not in str(e):
-    	raise e
+        raise e

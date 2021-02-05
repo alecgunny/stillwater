@@ -93,9 +93,7 @@ class LowLatencyFrameGenerator(DataGenerator):
             elif len(files) > 1:
                 raise ValueError(
                     "Found more than 1 file matching timestamp {} "
-                    "in directory {}: {}".format(
-                        t0, data_dir, ", ".join(files)
-                    )
+                    "in directory {}: {}".format(t0, data_dir, ", ".join(files))
                 )
             file_pattern = files[0].replace(str(t0), "{}")
         elif t0 is None:
