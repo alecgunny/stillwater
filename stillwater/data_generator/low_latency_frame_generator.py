@@ -5,7 +5,7 @@ import typing
 
 import attr
 import numpy as np
-from gwpy import TimeSeriesDict
+from gwpy.timeseries import TimeSeriesDict
 
 from stillwater.data_generator import DataGenerator
 from stillwater.utils import Package
@@ -37,7 +37,7 @@ class LowLatencyFrameGeneratorFn:
             while time.time() - start_time < 1:
                 try:
                     path = self.path_pattern.format(self.t0)
-                    data = TimeSeriesDict.read(path, self.chanslist)
+                    data = TimeSeriesDict.read(path, self.channels)
                     break
                 except FileNotFoundError:
                     continue
@@ -48,7 +48,7 @@ class LowLatencyFrameGeneratorFn:
             data.resample(self.sample_rate)
             self.data = np.stack(
                 [data[channel].value for channel in self.channels]
-            )
+            ).astype("float32")
             self.t0 += 1
 
             # raising an index error will get the DataGenerator's

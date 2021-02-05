@@ -11,5 +11,6 @@ from .dummy_data_generator import DummyDataGenerator
 # sounds like a lot of work
 try:
     from .low_latency_frame_generator import LowLatencyFrameGenerator
-except ImportError:
-    pass
+except ImportError as e:
+    if "gwpy" not in str(e):
+    	raise e
