@@ -29,7 +29,7 @@ class LowLatencyFrameGeneratorFn:
 
         # TODO: how are we going to handle kernel strides
         # that aren't a divisor of 1 second?
-        if stop == int(self.sample_rate) or self.data is None:
+        if start == int(self.sample_rate) or self.data is None:
             # try to load in the next second's worth of data
             # if it takes more than a second to get created,
             # then assume the worst and raise an error
