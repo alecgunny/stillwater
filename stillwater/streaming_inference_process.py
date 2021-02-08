@@ -3,7 +3,7 @@ import time
 import typing
 from multiprocessing import Event, Process
 
-from stillwater.utils import ExceptionWrapper, Relative
+from stillwater.utils import ExceptionWrapper, Relative, sync_recv
 
 if typing.TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -70,10 +70,6 @@ class StreamingInferenceProcess(Process):
         if not isinstance(exception, ExceptionWrapper):
             exception = ExceptionWrapper(exception)
 
-        # TODO: we need to figure out what's going
-        # wrong here
-        print(str(exception))
-
         self.stop()
         for child in self._children.values():
             child.send(exception)
@@ -91,26 +87,6 @@ class StreamingInferenceProcess(Process):
             self._break_glass(e)
             sys.exit(1)
 
-    def _read_parent(self, parent_name, timeout=None):
-        try:
-            conn = self._parents[parent_name]
-        except KeyError:
-            raise ValueError(f"No parent named {parent_name}")
-
-        # try to get an object, otherwise timeout
-        if conn.poll(timeout):
-            obj = conn.recv()
-        else:
-            return
-
-        # if we got passed an exception from a
-        # child process, it's time to exit so
-        # raise it and the try/except in self.run
-        # will catch it
-        if isinstance(obj, Exception):
-            raise obj
-        return obj
-
     def _get_data(self):
         """
         This method can be overwritten by child classes
@@ -120,47 +96,7 @@ class StreamingInferenceProcess(Process):
         is to read data from all the parent processes
         in a synchronized fashion
         """
-        # start by looping through all parents
-        # and trying to read one item from them
-        ready_objs = {}
-        for parent_name in self._parents:
-            obj = self._read_parent(parent_name)
-            if obj is not None:
-                ready_objs[parent_name] = obj
-
-        if ready_objs and len(ready_objs) < len(self._parents):
-            # at least one parent returned an item, and
-            # at least one did it. Try to wait around for
-            # 1 second and synchronize thme
-            start_time = time.time()
-            _TIMEOUT = 1
-            while (time.time() - start_time) < _TIMEOUT:
-                # loop through those parents that didn't
-                # return anything on the first go-around
-                for parent_name in set(self._parents) - set(ready_objs):
-                    obj = self._get(parent_name)
-                    if obj is not None:
-                        ready_objs[parent_name] = obj
-
-                # if everything has returned now, we're good so
-                # break out of the loop
-                if len(ready_objs) == len(self._parents):
-                    break
-            else:
-                # the loop never broke, which means at least one
-                # process continued not to return anything.
-                # Raise an error and report what was being difficult
-                unfinished = set(self._parents) - set(ready_objs)
-                raise RuntimeError(
-                    "Parent processes {} stopped providing data".format(
-                        ", ".join(unfinished)
-                    )
-                )
-        elif not ready_objs:
-            # if none of the parents returned anything, then
-            # just keep on truckin
-            return
-        return ready_objs
+        return sync_recv(self._parents)
 
     def _main_loop(self):
         while not self.stopped:
