@@ -45,25 +45,24 @@ def pipe(
 ) -> None:
     parent_conn, child_conn = Pipe()
 
+    str_process = namedtuple("Process", ["name"])
     str_relative = namedtuple("Relative", ["process", "conn"])
     if isinstance(parent, str) and isinstance(child, str):
         raise ValueError("Must provide at least one process to pipe between")
 
-    parent_cls = str_relative if isinstance(parent, str) else Relative
-    child_cls = str_relative if isinstance(parent, str) else Relative
-
-    parent = parent_cls(parent, parent_conn)
-    child = child_cls(child, child_conn)
     conn = None
-    if not isinstance(parent, str_relative):
-        parent.add_child(child)
+    if isinstance(parent, str):
+        parent = str_relative(str_process(parent), child_conn)
+        _ = child.add_parent(parent)
+        conn = parent_conn
     else:
-        conn = child.add_parent(parent)
-
-    if not isinstance(child, str_relative):
-        child.add_parent(parent)
-    else:
-        conn = parent.add_child(child)
+        if isinstance(child, str):
+            child = str_relative(str_process(child), parent_conn)
+            _ = parent.add_child(child)
+            conn = child_conn
+        else:
+            parent.add_child(Relative(child, parent_conn))
+            child.add_parent(Relative(parent, child_conn))
     return conn
 
 
@@ -113,7 +112,8 @@ def sync_recv(
             raise obj
         ready_objs[name] = obj
 
-    starmap(_recv_and_update, pipes.items())
+    for name, conn in pipes.items():
+        _recv_and_update(name, conn)
     if not ready_objs:
         # Nothing ever got returned, so bail
         return

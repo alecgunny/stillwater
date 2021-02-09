@@ -77,7 +77,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         # add the key, then make sure it was valid to
         # add, deleting it an erroring if it wasn't
         current_keys = set(self._parents)
-        super().add_parent(parent)
+        conn = super().add_parent(parent)
 
         new_key = (set(self._parents) - current_keys).pop()
         if new_key not in self.inputs:
@@ -87,10 +87,11 @@ class StreamingInferenceClient(StreamingInferenceProcess):
                 "to inference client expecting "
                 "sources {}".format(new_key, ", ".join(self.inputs.keys()))
             )
+        return conn
 
     def add_child(self, child: Relative):
         current_keys = set(self._children)
-        super().add_child(child)
+        conn = super().add_child(child)
 
         new_key = (set(self._children) - current_keys).pop()
         if new_key not in [x.name() for x in self.outputs]:
@@ -99,6 +100,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
                 "to inference client expecting "
                 "outputs {}".format(new_key, ", ".join(self.inputs.keys()))
             )
+        return conn
 
     def _callback(self, result, error):
         # raise the error if anything went wrong
