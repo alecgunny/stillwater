@@ -29,6 +29,12 @@ class LowLatencyFrameGeneratorFn:
 
         # TODO: how are we going to handle kernel strides
         # that aren't a divisor of 1 second?
+        # I think the solution is to hang on to whatever
+        # samples might be left over and insert them at
+        # the start of `data` once its loaded, then iterate
+        # normally? We can use `data.shape[1] instead of
+        # `sample_rate`, which is probably more dynamic
+        # anyway
         if start == int(self.sample_rate) or self.data is None:
             # try to load in the next second's worth of data
             # if it takes more than a second to get created,
@@ -60,7 +66,8 @@ class LowLatencyFrameGeneratorFn:
 
         # constant offset due to time conventions
         # on LLF file names
-        t0 = self.t0 + idx * self.kernel_stride + 315964794
+        # TODO: introduce GPS time here
+        t0 = self.t0 + (1 - idx * self.kernel_stride) + 315964794
         return Package(x=x, t0=t0)
 
 

@@ -111,6 +111,8 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         id = int(result.get_response().id)
         t0 = self._start_times.pop(id)
+
+        # TODO: use GPS time
         end_time = time.time()
         latency = end_time - t0
         throughput = id / (end_time - self._start_time)
