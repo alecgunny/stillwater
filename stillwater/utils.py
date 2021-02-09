@@ -67,7 +67,10 @@ def pipe(
     return conn
 
 
-def sync_recv(pipes: typing.Dict[str, Connection], timeout: float = 1.0):
+def sync_recv(
+    pipes: typing.Dict[str, "Connection"],
+    timeout: float = 1.0
+) -> typing.Optional["Connection"]:
     """
     Do a synchronized reading from multiple connections
     to inference processes. Works by iterating through

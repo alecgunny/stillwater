@@ -18,7 +18,7 @@ class StreamingInferenceProcess(Process):
         self._stop_event = Event()
         super().__init__(name=name)
 
-    def add_parent(self, parent: Relative) -> Connection:
+    def add_parent(self, parent: Relative) -> "Connection":
         if parent.process is None:
             name = None
         else:
@@ -29,7 +29,7 @@ class StreamingInferenceProcess(Process):
             self._parents[name] = parent.conn
         return parent.conn
 
-    def add_child(self, child: Relative) -> Connection:
+    def add_child(self, child: Relative) -> "Connection":
         if child.process is None:
             name = None
         else:
