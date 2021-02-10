@@ -15,7 +15,7 @@ class DummyDataGeneratorFn:
 
     def __attrs_post_init__(self):
         if self.sample_rate is not None:
-            self._wait_time = self.sample_rate * self.shape[-1]
+            self._wait_time = self.shape[-1] / self.sample_rate
         else:
             self._wait_time = None
         self._last_time = time.time()
@@ -26,7 +26,7 @@ class DummyDataGeneratorFn:
             and time.time() - self._last_time < self._wait_time
         ):
             return
-        x = np.random.randn(*self.shape)
+        x = np.random.randn(*self.shape).astype("float32")
         package = Package(x=x, t0=time.time())
         self._last_time = package.t0
         return package
