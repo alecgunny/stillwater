@@ -183,3 +183,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             sequence_start=self._request_id == 1,
             sequence_id=self.sequence_id,
         )
+
+    def get_inference_stats(self):
+        with triton.InferenceServerClient(self.url) as client:
+            return client.get_inference_statistics().model_stats
