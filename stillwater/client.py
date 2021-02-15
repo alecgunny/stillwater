@@ -105,7 +105,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             child_name = child.name
         except AttributeError:
             child_name = child
-        if child_name not in self.outputs:
+        if child_name not in [x.name() for x in self.outputs]:
             raise ValueError(
                 "Tried to add output named {} "
                 "to inference client expecting "
