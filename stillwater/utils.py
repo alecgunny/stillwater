@@ -2,8 +2,6 @@ import sys
 import time
 import typing
 from collections import namedtuple
-from itertools import starmap
-from multiprocessing import Pipe
 
 import attr
 import numpy as np
@@ -12,15 +10,25 @@ from tblib import pickling_support
 if typing.TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    from stillwater.streaming_inference_process import (
-        StreamingInferenceProcess,
-    )
 
+class Relatives:
+    def __new__(cls, fields=None, values=None):
+        class _Relatives(namedtuple("Relatives", fields or [])):
+            def add_relative(self, name: str, value: "Connection"):
+                fields = self._fields + (name,)
+                values = [getattr(self, f) for f in self._fields] + [value]
+                return Relatives(fields, values)
 
-@attr.s(auto_attribs=True)
-class Relative:
-    process: "StreamingInferenceProcess"
-    conn: "Connection"
+            def remove_relative(self, name: str):
+                if name not in self._fields:
+                    raise ValueError(f"No relative named {name}")
+                fields = [f for f in self._fields if f != name]
+                values = [getattr(self, f) for f in fields]
+                return Relatives(fields, values)
+
+        values = values or []
+        relatives = _Relatives(*values)
+        return relatives
 
 
 @attr.s(auto_attribs=True)
@@ -39,37 +47,9 @@ class ExceptionWrapper(Exception):
         raise self.exc.with_traceback(self.tb)
 
 
-def pipe(
-    parent: typing.Optional["StreamingInferenceProcess"],
-    child: typing.Optional["StreamingInferenceProcess"],
-) -> None:
-    parent_conn, child_conn = Pipe()
-
-    str_process = namedtuple("Process", ["name"])
-    str_relative = namedtuple("Relative", ["process", "conn"])
-    if isinstance(parent, str) and isinstance(child, str):
-        raise ValueError("Must provide at least one process to pipe between")
-
-    conn = None
-    if isinstance(parent, str):
-        parent = str_relative(str_process(parent), child_conn)
-        _ = child.add_parent(parent)
-        conn = parent_conn
-    else:
-        if isinstance(child, str):
-            child = str_relative(str_process(child), parent_conn)
-            _ = parent.add_child(child)
-            conn = child_conn
-        else:
-            parent.add_child(Relative(child, parent_conn))
-            child.add_parent(Relative(parent, child_conn))
-    return conn
-
-
 def sync_recv(
-    pipes: typing.Dict[str, "Connection"],
-    timeout: float = 1.0
-) -> typing.Optional["Connection"]:
+    pipes: typing.Dict[str, "Connection"], timeout: float = 1.0
+) -> typing.Optional[typing.Dict[str, typing.Union[Package, ExceptionWrapper]]]:
     """
     Do a synchronized reading from multiple connections
     to inference processes. Works by iterating through

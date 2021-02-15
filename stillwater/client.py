@@ -7,7 +7,11 @@ import typing
 import tritonclient.grpc as triton
 
 from stillwater.streaming_inference_process import StreamingInferenceProcess
-from stillwater.utils import ExceptionWrapper, Package, Relative
+from stillwater.utils import ExceptionWrapper, Package
+
+if typing.TYPE_CHECKING:
+    from multiprocessing import Process
+    from multiprocessing.connection import Connection
 
 
 class StreamingInferenceClient(StreamingInferenceProcess):
@@ -68,7 +72,11 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             for output in model_metadata.outputs
         ]
 
-    def add_parent(self, parent: Relative):
+    def add_parent(
+        self,
+        parent: typing.Union[str, "Process"],
+        conn: typing.Optional["Connection"] = None,
+    ):
         """
         Override these methods in order to match process
         names with the inputs and outputs the model is
@@ -76,31 +84,34 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         """
         # add the key, then make sure it was valid to
         # add, deleting it an erroring if it wasn't
-        current_keys = set(self._parents)
-        conn = super().add_parent(parent)
-
-        new_key = (set(self._parents) - current_keys).pop()
-        if new_key not in self.inputs:
-            self._parents.pop(new_key)
+        try:
+            parent_name = parent.name
+        except AttributeError:
+            parent_name = parent
+        if parent_name not in self.inputs:
             raise ValueError(
                 "Tried to add data source named {} "
                 "to inference client expecting "
-                "sources {}".format(new_key, ", ".join(self.inputs.keys()))
+                "sources {}".format(parent_name, ", ".join(self.inputs.keys()))
             )
-        return conn
+        return super().add_parent(parent, conn)
 
-    def add_child(self, child: Relative):
-        current_keys = set(self._children)
-        conn = super().add_child(child)
-
-        new_key = (set(self._children) - current_keys).pop()
-        if new_key not in [x.name() for x in self.outputs]:
+    def add_child(
+        self,
+        child: typing.Union[str, "Process"],
+        conn: typing.Optional["Connection"] = None,
+    ):
+        try:
+            child_name = child.name
+        except AttributeError:
+            child_name = child
+        if child_name not in self.outputs:
             raise ValueError(
                 "Tried to add output named {} "
                 "to inference client expecting "
-                "outputs {}".format(new_key, ", ".join(self.inputs.keys()))
+                "outputs {}".format(child_name, ", ".join(self.inputs.keys()))
             )
-        return conn
+        return super().add_child(child, conn)
 
     def _callback(self, result, error):
         # raise the error if anything went wrong
@@ -126,7 +137,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         # first make sure we've plugged in all the necessary
         # input data streams, and have places to send all
         # the necessary outputs
-        missing_sources = set(self.inputs) - set(self._parents)
+        missing_sources = set(self.inputs) - set(self._parents._fields)
         if not len(missing_sources) == 0:
             raise RuntimeError(
                 "Couldn't start inference client process, "
@@ -134,7 +145,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             )
 
         output_names = set([x.name() for x in self.outputs])
-        missing_outputs = output_names - set(self._children)
+        missing_outputs = output_names - set(self._children._fields)
         if not len(missing_outputs) == 0:
             raise RuntimeError(
                 "Couldn't start inference client process, "
