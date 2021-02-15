@@ -11,24 +11,43 @@ if typing.TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
 
-class Relatives:
-    def __new__(cls, fields=None, values=None):
-        class _Relatives(namedtuple("Relatives", fields or [])):
-            def add_relative(self, name: str, value: "Connection"):
-                fields = self._fields + (name,)
-                values = [getattr(self, f) for f in self._fields] + [value]
-                return Relatives(fields, values)
+class ObjectMappingTuple:
 
-            def remove_relative(self, name: str):
-                if name not in self._fields:
-                    raise ValueError(f"No relative named {name}")
-                fields = [f for f in self._fields if f != name]
+    """
+    Utility class for creating namedtuples capable
+    of adding or subtracting members. Useful for
+    building variable length, dictionary-like objects
+    that can autocomplete their members and are immutable
+    TODO: maybe something like a mappingproxy makes more
+    sense? This is bad because we can do isinstance checking
+    etc.
+    """
+
+    def __new__(
+        cls,
+        fields: typing.Optional[typing.List[str]] = None,
+        values: typing.Optional[typing.List[None]] = None,
+    ):
+        class ObjectMapping(namedtuple(cls._name, fields or [])):
+            def add(self, field: str, value: cls._value_type):
+                fields = self._fields + (field,)
+                values = [getattr(self, f) for f in self._fields] + [value]
+                return cls.__new__(cls, fields, values)
+
+            def remove(self, field: str):
+                if field not in self._fields:
+                    raise ValueError(f"No field named {field}")
+                fields = [f for f in self._fields if f != field]
                 values = [getattr(self, f) for f in fields]
-                return Relatives(fields, values)
+                return cls.__new__(cls, fields, values)
 
         values = values or []
-        relatives = _Relatives(*values)
-        return relatives
+        return ObjectMapping(*values)
+
+
+class Relatives(ObjectMappingTuple):
+    _name = "Relative"
+    _value_type = Connection
 
 
 @attr.s(auto_attribs=True)
