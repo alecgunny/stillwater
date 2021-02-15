@@ -1,9 +1,8 @@
 import sys
-import time
 import typing
-from multiprocessing import Event, Process
+from multiprocessing import Event, Pipe, Process
 
-from stillwater.utils import ExceptionWrapper, Relative, sync_recv
+from stillwater.utils import ExceptionWrapper, Relatives, sync_recv
 
 if typing.TYPE_CHECKING:
     from multiprocessing.connection import Connection
@@ -11,34 +10,121 @@ if typing.TYPE_CHECKING:
 
 class StreamingInferenceProcess(Process):
     def __init__(self, name: str) -> None:
-        self._parents = {}
-        self._children = {}
+        self._parents = Relatives()
+        self._children = Relatives()
 
         self._pause_event = Event()
         self._stop_event = Event()
         super().__init__(name=name)
 
-    def add_parent(self, parent: Relative) -> "Connection":
-        if parent.process is None:
-            name = None
-        else:
-            name = parent.process.name
-        if name in self._parents and self._parents[name] is not parent.conn:
-            raise ValueError(f"Parent {name} already has associated connection.")
-        elif name not in self._parents:
-            self._parents[name] = parent.conn
-        return parent.conn
+    def add_parent(
+        self,
+        parent: typing.Union[Process, str],
+        conn: typing.Optional["Connection"] = None,
+    ) -> typing.Optional["Connection"]:
+        # make sure we're not routing us to ourselves
+        if parent is self:
+            raise ValueError("Cannot pipe process to itself!")
 
-    def add_child(self, child: Relative) -> "Connection":
-        if child.process is None:
-            name = None
+        # try to get name
+        try:
+            parent_name = parent.name
+        except AttributeError:
+            parent_name = parent
+
+        # check if we already have an incoming connection
+        # from a process by this name
+        try:
+            existing_conn = getattr(self._parents, parent_name)
+        except AttributeError:
+            pass
         else:
-            name = child.process.name
-        if name in self._children and self._children[name] is not child.conn:
-            raise ValueError(f"Child {name} already has associated connection.")
-        elif name not in self._children:
-            self._children[name] = child.conn
-        return child.conn
+            # if we do and we didn't pass a connection, or
+            # the one we passed isn't the one we already have,
+            # raise an exception
+            if conn is None or conn is not existing_conn:
+                raise ValueError(
+                    f"Process {parent.name} already a parent to "
+                    f"process {self.name}"
+                )
+
+        # if we don't make a connection here,
+        # don't pass anything back to the main
+        # process
+        parent_conn = None
+        if conn is None:
+            # we didn't pass a connection, so make one here
+            parent_conn, conn = Pipe()
+            if not isinstance(parent, str):
+                # add ourselves as a child to the parent
+                # process
+                parent.add_child(self, parent_conn)
+
+        # maybe return a connection if we had to
+        # create one here
+        _return_conn = None
+        if not isinstance(parent, str):
+            # parent is a process, so we don't
+            # need to return anything. Grab the
+            # name for adding the relative
+            parent = parent.name
+        else:
+            # parent is a string, so we want to
+            # return the connection to the main
+            # process if we had to create it
+            _return_conn = parent_conn
+
+        # add relative
+        self._parents = self._parents.add(parent, conn)
+        return _return_conn
+
+    def add_child(
+        self,
+        child: typing.Union[Process, str],
+        conn: typing.Optional["Connection"] = None,
+    ) -> typing.Optional["Connection"]:
+        # make sure we're not routing us to ourselves
+        if child is self:
+            raise ValueError("Cannot pipe process to itself!")
+
+        # try to get name
+        try:
+            child_name = child.name
+        except AttributeError:
+            child_name = child
+
+        # check if we already have outgoing connection for
+        # a process by this name
+        try:
+            existing_conn = getattr(self._children, child_name)
+        except AttributeError:
+            pass
+        else:
+            # if we do and we didn't pass a connection, or
+            # the one we passed isn't the one we already have,
+            # raise an exception
+            if conn is None or conn is not existing_conn:
+                raise ValueError(
+                    f"Process {child.name} already a parent to "
+                    f"process {self.name}"
+                )
+
+        # see comments from parent section for
+        # explanation as to what's happening here
+        child_conn = None
+        if conn is None:
+            conn, child_conn = Pipe()
+            if not isinstance(child, str):
+                child.add_parent(self, child_conn)
+
+        _return_conn = None
+        if not isinstance(child, str):
+            child = child.name
+        else:
+            _return_conn = child_conn
+
+        self._children = self._children.add(child, conn)
+        return _return_conn
 
     @property
     def stopped(self):
@@ -96,7 +182,8 @@ class StreamingInferenceProcess(Process):
         is to read data from all the parent processes
         in a synchronized fashion
         """
-        return sync_recv(self._parents)
+        pipes = {f: getattr(self._parents, f) for f in self._parents._fields}
+        return sync_recv(pipes)
 
     def _main_loop(self):
         while not self.stopped:

@@ -3,8 +3,6 @@ import sys
 import time
 import typing
 from collections import namedtuple
-from itertools import starmap
-from multiprocessing import Pipe
 
 import attr
 import numpy as np
@@ -13,13 +11,9 @@ from tblib import pickling_support
 if typing.TYPE_CHECKING:
     from multiprocessing.connection import Connection
 
-    from stillwater.streaming_inference_process import (
-        StreamingInferenceProcess,
-    )
-
 
 _GPS_EPOCH = datetime.datetime(
-    1980, 1, 6, 0, 0, 0, # tzinfo=datetime.timezone.utc
+    1980, 1, 6, 0, 0, 0
 ).timestamp()
 def gps_time():
     """
@@ -28,10 +22,42 @@ def gps_time():
     return time.time() # datetime.datetime.utcnow().timestamp() - _GPS_EPOCH + 7
 
 
-@attr.s(auto_attribs=True)
-class Relative:
-    process: "StreamingInferenceProcess"
-    conn: "Connection"
+class ObjectMappingTuple:
+    """
+    Utility class for creating namedtuples capable
+    of adding or subtracting members. Useful for
+    building variable length, dictionary-like objects
+    that can autocomplete their members and are immutable
+    TODO: maybe something like a mappingproxy makes more
+    sense? This is bad because we can do isinstance checking
+    etc.
+    """
+
+    def __new__(
+        cls,
+        fields: typing.Optional[typing.List[str]] = None,
+        values: typing.Optional[typing.List[None]] = None,
+    ):
+        class ObjectMapping(namedtuple(cls._name, fields or [])):
+            def add(self, field: str, value: cls._value_type):
+                fields = self._fields + (field,)
+                values = [getattr(self, f) for f in self._fields] + [value]
+                return cls.__new__(cls, fields, values)
+
+            def remove(self, field: str):
+                if field not in self._fields:
+                    raise ValueError(f"No field named {field}")
+                fields = [f for f in self._fields if f != field]
+                values = [getattr(self, f) for f in fields]
+                return cls.__new__(cls, fields, values)
+
+        values = values or []
+        return ObjectMapping(*values)
+
+
+class Relatives(ObjectMappingTuple):
+    _name = "Relative"
+    _value_type = Connection
 
 
 @attr.s(auto_attribs=True)
@@ -50,37 +76,9 @@ class ExceptionWrapper(Exception):
         raise self.exc.with_traceback(self.tb)
 
 
-def pipe(
-    parent: typing.Optional["StreamingInferenceProcess"],
-    child: typing.Optional["StreamingInferenceProcess"],
-) -> None:
-    parent_conn, child_conn = Pipe()
-
-    str_process = namedtuple("Process", ["name"])
-    str_relative = namedtuple("Relative", ["process", "conn"])
-    if isinstance(parent, str) and isinstance(child, str):
-        raise ValueError("Must provide at least one process to pipe between")
-
-    conn = None
-    if isinstance(parent, str):
-        parent = str_relative(str_process(parent), child_conn)
-        _ = child.add_parent(parent)
-        conn = parent_conn
-    else:
-        if isinstance(child, str):
-            child = str_relative(str_process(child), parent_conn)
-            _ = parent.add_child(child)
-            conn = child_conn
-        else:
-            parent.add_child(Relative(child, parent_conn))
-            child.add_parent(Relative(parent, child_conn))
-    return conn
-
-
 def sync_recv(
-    pipes: typing.Dict[str, "Connection"],
-    timeout: float = 1.0
-) -> typing.Optional["Connection"]:
+    pipes: typing.Dict[str, "Connection"], timeout: float = 1.0
+) -> typing.Optional[typing.Dict[str, typing.Union[Package, ExceptionWrapper]]]:
     """
     Do a synchronized reading from multiple connections
     to inference processes. Works by iterating through

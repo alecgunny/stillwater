@@ -21,7 +21,7 @@ class DataGenerator(StreamingInferenceProcess):
             return self._generator_fn(self.idx)
 
     def _do_stuff_with_data(self, objs):
-        for child in self._children.values():
+        for child in self._children:
             child.send(objs)
 
         self.idx += 1
