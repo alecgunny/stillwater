@@ -127,8 +127,9 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         end_time = gps_time()
         latency = end_time - t0
         throughput = id / (end_time - self._start_time)
-        for name, conn in self._children.items():
+        for name in self._children._fields:
             x = result.as_numpy(name)
+            conn = getattr(self._children, name)
             conn.send(Package(x, (latency, throughput)))
 
     def _main_loop(self):

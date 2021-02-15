@@ -3,13 +3,11 @@ import sys
 import time
 import typing
 from collections import namedtuple
+from multiprocessing.connection import Connection
 
 import attr
 import numpy as np
 from tblib import pickling_support
-
-if typing.TYPE_CHECKING:
-    from multiprocessing.connection import Connection
 
 
 _GPS_EPOCH = datetime.datetime(

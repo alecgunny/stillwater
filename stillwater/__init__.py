@@ -2,4 +2,4 @@ from .streaming_inference_process import StreamingInferenceProcess  # isort: ski
 
 from .client import StreamingInferenceClient
 from .data_generator import *
-from .utils import ExceptionWrapper, pipe, sync_recv
+from .utils import ExceptionWrapper, sync_recv
