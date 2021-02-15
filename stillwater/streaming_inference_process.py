@@ -69,7 +69,7 @@ class StreamingInferenceProcess(Process):
         """
         if not isinstance(exception, ExceptionWrapper):
             exception = ExceptionWrapper(exception)
-
+        print(exception)
         self.stop()
         for child in self._children.values():
             child.send(exception)

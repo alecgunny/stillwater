@@ -1,13 +1,12 @@
 import ctypes
 import random
 import string
-import time
 import typing
 
 import tritonclient.grpc as triton
 
 from stillwater.streaming_inference_process import StreamingInferenceProcess
-from stillwater.utils import ExceptionWrapper, Package, Relative
+from stillwater.utils import ExceptionWrapper, gps_time, Package, Relative
 
 
 class StreamingInferenceClient(StreamingInferenceProcess):
@@ -114,8 +113,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         id = int(result.get_response().id)
         t0 = self._start_times.pop(id)
 
-        # TODO: use GPS time
-        end_time = time.time()
+        end_time = gps_time()
         latency = end_time - t0
         throughput = id / (end_time - self._start_time)
         for name, conn in self._children.items():
@@ -149,7 +147,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
             # measure the stream start time as a
             # point of reference for profiling purposes
-            self._start_time = time.time()
+            self._start_time = gps_time()
             self._request_id = 0
             super()._main_loop()
 

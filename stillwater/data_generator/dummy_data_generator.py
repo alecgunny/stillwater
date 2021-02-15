@@ -1,11 +1,10 @@
-import time
 import typing
 
 import attr
 import numpy as np
 
 from stillwater.data_generator import DataGenerator
-from stillwater.utils import Package
+from stillwater.utils import gps_time, Package
 
 
 @attr.s(auto_attribs=True)
@@ -18,16 +17,16 @@ class DummyDataGeneratorFn:
             self._wait_time = self.shape[-1] / self.sample_rate
         else:
             self._wait_time = None
-        self._last_time = time.time()
+        self._last_time = gps_time()
 
     def __call__(self, idx):
         if (
             self._wait_time is not None
-            and time.time() - self._last_time < self._wait_time
+            and gps_time() - self._last_time < self._wait_time
         ):
             return
         x = np.random.randn(*self.shape).astype("float32")
-        package = Package(x=x, t0=time.time())
+        package = Package(x=x, t0=gps_time())
         self._last_time = package.t0
         return package
 

@@ -21,21 +21,14 @@ class LowLatencyFrameGeneratorFn:
 
     def __attrs_post_init__(self):
         self.data = None
+        self._latency_t0 = None
         self._update_size = int(self.sample_rate * self.kernel_stride)
 
     def __call__(self, idx):
         start = idx * self._update_size
         stop = (idx + 1) * self._update_size
 
-        # TODO: how are we going to handle kernel strides
-        # that aren't a divisor of 1 second?
-        # I think the solution is to hang on to whatever
-        # samples might be left over and insert them at
-        # the start of `data` once its loaded, then iterate
-        # normally? We can use `data.shape[1] instead of
-        # `sample_rate`, which is probably more dynamic
-        # anyway
-        if start == int(self.sample_rate) or self.data is None:
+        if self.data is None or stop > self.data.shape[1]:
             # try to load in the next second's worth of data
             # if it takes more than a second to get created,
             # then assume the worst and raise an error
@@ -49,12 +42,18 @@ class LowLatencyFrameGeneratorFn:
                     continue
             else:
                 raise ValueError(f"Couldn't find next timestep file {path}")
+            self._latency_t0 = os.stat(path).st_ctime - 1
 
             # resample the data and turn it into a numpy array
             data.resample(self.sample_rate)
-            self.data = np.stack(
+            data = np.stack(
                 [data[channel].value for channel in self.channels]
             ).astype("float32")
+
+            if self.data is not None and start < self.data.shape[1]:
+                leftover = self.data[:, start:]
+                data = np.concatenate([leftover, data], axis=1)
+            self.data = data
             self.t0 += 1
 
             # raising an index error will get the DataGenerator's
@@ -64,10 +63,10 @@ class LowLatencyFrameGeneratorFn:
         # return the next piece of data
         x = self.data[:, start:stop]
 
-        # constant offset due to time conventions
-        # on LLF file names
-        # TODO: introduce GPS time here
-        t0 = self.t0 + (1 - idx * self.kernel_stride) + 315964794
+        # offset the frame's initial time by the
+        # time corresponding to the first sample
+        # of stream
+        t0 = self._latency_t0 + idx * self.kernel_stride
         return Package(x=x, t0=t0)
 
 
@@ -124,5 +123,5 @@ class LowLatencyFrameGenerator(DataGenerator):
             sample_rate,
             channels,
         )
-        idx_range = int(1 / sample_rate)
+        idx_range = int(1 / kernel_stride) + 1
         super().__init__(generator_fn, idx_range, name)

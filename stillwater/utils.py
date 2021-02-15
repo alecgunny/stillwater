@@ -1,3 +1,4 @@
+import datetime
 import sys
 import time
 import typing
@@ -15,6 +16,16 @@ if typing.TYPE_CHECKING:
     from stillwater.streaming_inference_process import (
         StreamingInferenceProcess,
     )
+
+
+_GPS_EPOCH = datetime.datetime(
+    1980, 1, 6, 0, 0, 0, # tzinfo=datetime.timezone.utc
+).timestamp()
+def gps_time():
+    """
+    TODO: why are these off?
+    """
+    return time.time() # datetime.datetime.utcnow().timestamp() - _GPS_EPOCH + 7
 
 
 @attr.s(auto_attribs=True)
