@@ -157,7 +157,7 @@ class StreamingInferenceProcess(Process):
             exception = ExceptionWrapper(exception)
         print(exception)
         self.stop()
-        for child in self._children.values():
+        for child in self._children:
             child.send(exception)
 
     def run(self) -> None:
