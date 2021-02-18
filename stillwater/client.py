@@ -115,7 +115,8 @@ class StreamingInferenceClient(StreamingInferenceProcess):
     def _callback(self, result, error):
         # raise the error if anything went wrong
         if error is not None:
-            for name, conn in self._children.items():
+            print(error)
+            for conn in self._children:
                 exc = ExceptionWrapper(RuntimeError(error))
                 conn.send(exc)
             self.stop()
