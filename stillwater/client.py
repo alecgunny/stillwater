@@ -1,8 +1,10 @@
 import ctypes
 import random
 import string
+import time
 import typing
 
+import numpy as np
 import tritonclient.grpc as triton
 
 from stillwater.streaming_inference_process import StreamingInferenceProcess
@@ -62,14 +64,25 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         # model
         model_metadata = client.get_model_metadata(model_name)
         self.inputs = {}
-        for input in model_metadata.inputs:
-            self.inputs[input.name] = triton.InferInput(
-                input.name, tuple(input.shape), input.datatype
+        inputs = [
+            ("witness_h", (1, 21, 4000)),
+            ("witness_l", (1, 21, 4000)),
+            ("strain", (1, 2, 4000))
+        ]
+        print(model_metadata.inputs)
+        for name, shape in inputs:
+            self.inputs[name] = triton.InferInput(
+                name, tuple(shape), model_metadata.inputs[0].datatype
             )
+        self._inputs = triton.InferInput(
+            "stream", tuple(model_metadata.inputs[0].shape), model_metadata.inputs[0].datatype
+        )
         self.outputs = [
             triton.InferRequestedOutput(output.name)
             for output in model_metadata.outputs
         ]
+        self._send_times = {}
+        self._av_send_time = 0.
 
     def add_parent(
         self,
@@ -124,8 +137,11 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         id = int(result.get_response().id)
         t0 = self._start_times.pop(id)
+        send_t0 = self._send_times.pop(id)
 
         end_time = gps_time()
+        self._av_send_time += (end_time - send_t0 - self._av_send_time) / id
+
         latency = end_time - t0
         throughput = id / (end_time - self._start_time)
         for name in self._children._fields:
@@ -167,17 +183,21 @@ class StreamingInferenceClient(StreamingInferenceProcess):
     def _do_stuff_with_data(self, objs):
         t0 = 0
         assert len(objs) == len(self.inputs)
+        x = []
         for name, package in objs.items():
-            self.inputs[name].set_data_from_numpy(package.x[None])
+            x.append(package.x[None])
             t0 += package.t0
+        x = np.concatenate(x, axis=1)
+        self._inputs.set_data_from_numpy(x)
         t0 /= len(objs)
 
         self._request_id += 1
+        self._send_times[self._request_id + 0] = time.time()
         self._start_times[self._request_id + 0] = t0
 
         self.client.async_stream_infer(
             self.model_name,
-            inputs=list(self.inputs.values()),
+            inputs=[self._inputs],
             outputs=self.outputs,
             request_id=str(self._request_id),
             sequence_start=self._request_id == 1,
