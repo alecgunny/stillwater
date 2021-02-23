@@ -8,7 +8,7 @@ import numpy as np
 import tritonclient.grpc as triton
 
 from stillwater.streaming_inference_process import StreamingInferenceProcess
-from stillwater.utils import ExceptionWrapper, gps_time, Package
+from stillwater.utils import ExceptionWrapper, Package, gps_time
 
 if typing.TYPE_CHECKING:
     from multiprocessing import Process
@@ -67,22 +67,24 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         inputs = [
             ("witness_h", (1, 21, 4000)),
             ("witness_l", (1, 21, 4000)),
-            ("strain", (1, 2, 4000))
+            ("strain", (1, 2, 4000)),
         ]
-        print(model_metadata.inputs)
+
         for name, shape in inputs:
             self.inputs[name] = triton.InferInput(
                 name, tuple(shape), model_metadata.inputs[0].datatype
             )
         self._inputs = triton.InferInput(
-            "stream", tuple(model_metadata.inputs[0].shape), model_metadata.inputs[0].datatype
+            "stream",
+            tuple(model_metadata.inputs[0].shape),
+            model_metadata.inputs[0].datatype,
         )
         self.outputs = [
             triton.InferRequestedOutput(output.name)
             for output in model_metadata.outputs
         ]
         self._send_times = {}
-        self._av_send_time = 0.
+        self._av_send_time = 0.0
 
     def add_parent(
         self,
