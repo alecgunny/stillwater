@@ -33,7 +33,7 @@ class LowLatencyFrameGeneratorFn:
             # if it takes more than a second to get created,
             # then assume the worst and raise an error
             start_time = time.time()
-            while time.time() - start_time < 1:
+            while time.time() - start_time < 3:
                 try:
                     path = self.path_pattern.format(self.t0)
                     data = TimeSeriesDict.read(path, self.channels)
