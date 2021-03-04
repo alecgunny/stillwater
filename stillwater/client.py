@@ -60,25 +60,39 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         self.sequence_id = sequence_id
 
         # use the server to tell us what inputs and
-        # outputs we need to expose for the given
-        # model
+        # outputs we need to expose for the given model
+        # self._inputs represents the internal real input
+        # that gets exposed to the model, while self.inputs
+        # represents the named inputs that get exposed to
+        # upstream data generators (for streaming input with
+        # multiple streams)
         model_metadata = client.get_model_metadata(model_name)
-        self.inputs = {}
-        inputs = [
-            ("witness_h", (1, 21, 4000)),
-            ("witness_l", (1, 21, 4000)),
-            ("strain", (1, 2, 4000)),
-        ]
+        self._inputs = {
+            x.name: triton.InferInput(x.name, tuple(x.shape), x.datatype)
+            for x in model_metadata.inputs
+        }
 
-        for name, shape in inputs:
-            self.inputs[name] = triton.InferInput(
-                name, tuple(shape), model_metadata.inputs[0].datatype
-            )
-        self._inputs = triton.InferInput(
-            "stream",
-            tuple(model_metadata.inputs[0].shape),
-            model_metadata.inputs[0].datatype,
-        )
+        model_config = client.get_model_config(model_name).config
+        try:
+            self.streams = model_config.parameters[
+                "stream_channels"
+            ].string_value.split(",")
+        except KeyError:
+            self.inputs = self._inputs
+            self.streams = None
+        else:
+            self.inputs = {}
+            for stream in self.streams:
+                input_model_name, input_name = stream.split("/")
+                md = client.get_model_metadata(input_model_name)
+                input = [x for x in md.inputs if x.name == input_name][0]
+
+                shape = list(input.shape)
+                shape[-1] = model_config.input[0].dims[-1]
+                self.inputs[stream] = triton.InferInput(
+                    input.name, shape, input.datatype
+                )
+
         self.outputs = [
             triton.InferRequestedOutput(output.name)
             for output in model_metadata.outputs
@@ -185,12 +199,24 @@ class StreamingInferenceClient(StreamingInferenceProcess):
     def _do_stuff_with_data(self, objs):
         t0 = 0
         assert len(objs) == len(self.inputs)
+
         x = []
-        for name, package in objs.items():
-            x.append(package.x[None])
+        streams = self.streams or objs.keys()
+        for stream in streams:
+            package = objs[stream]
             t0 += package.t0
-        x = np.concatenate(x, axis=1)
-        self._inputs.set_data_from_numpy(x)
+            if self.streams is None:
+                self._inputs[stream].set_data_from_numpy(package.x[None])
+            else:
+                x.append(package.x[None])
+
+        if len(x) > 0:
+            if len(x) > 1:
+                x = np.concatenate(x, axis=1)
+            else:
+                x = x[0]
+            self._inputs["stream"].set_data_from_numpy(x)
+
         t0 /= len(objs)
 
         self._request_id += 1
@@ -199,7 +225,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         self.client.async_stream_infer(
             self.model_name,
-            inputs=[self._inputs],
+            inputs=list(self._inputs.values()),
             outputs=self.outputs,
             request_id=str(self._request_id),
             sequence_start=self._request_id == 1,
@@ -208,4 +234,13 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
     def get_inference_stats(self):
         with triton.InferenceServerClient(self.url) as client:
-            return client.get_inference_statistics().model_stats
+            model_config = client.get_model_config(self.model_name).config
+            models = [i.model_name for i in model_config.ensemble_scheduling.step]
+            if len(models) == 0:
+                models = [model_config.name]
+
+            stats = {}
+            for model in models:
+                s = client.get_inference_statistics(model).model_stats
+                stats[model] = s[0].inference_stats
+        return stats

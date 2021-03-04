@@ -2,22 +2,21 @@ import datetime
 import sys
 import time
 import typing
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from multiprocessing.connection import Connection
 
 import attr
 import numpy as np
 from tblib import pickling_support
 
+_GPS_EPOCH = datetime.datetime(1980, 1, 6, 0, 0, 0).timestamp()
 
-_GPS_EPOCH = datetime.datetime(
-    1980, 1, 6, 0, 0, 0
-).timestamp()
+
 def gps_time():
     """
     TODO: why are these off?
     """
-    return time.time() # datetime.datetime.utcnow().timestamp() - _GPS_EPOCH + 7
+    return time.time()  # datetime.datetime.utcnow().timestamp() - _GPS_EPOCH + 7
 
 
 class ObjectMappingTuple:
@@ -53,9 +52,35 @@ class ObjectMappingTuple:
         return ObjectMapping(*values)
 
 
-class Relatives(ObjectMappingTuple):
-    _name = "Relative"
-    _value_type = Connection
+class Relatives:  # (ObjectMappingTuple):
+    # _name = "Relative"
+    # _value_type = Connection
+    def __init__(self, relatives=None):
+        self._relatives = relatives or OrderedDict()
+
+    def add(self, field: str, value: Connection):
+        self._relatives[field] = value
+        return Relatives(self._relatives.copy())
+
+    def remove(self, field: str):
+        try:
+            self._relatives.pop(field)
+        except KeyError:
+            raise ValueError(f"No relative {field}")
+        return Relatives(self._relatives.copy())
+
+    @property
+    def _fields(self):
+        return list(self._relatives.keys())
+
+    def __getattr__(self, key):
+        try:
+            return self.__getattribute__("_relatives")[key]
+        except KeyError:
+            return super().__getattribute__(key)
+
+    def __iter__(self):
+        return iter(self._relatives.values())
 
 
 @attr.s(auto_attribs=True)

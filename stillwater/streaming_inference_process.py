@@ -105,7 +105,7 @@ class StreamingInferenceProcess(Process):
             # raise an exception
             if conn is None or conn is not existing_conn:
                 raise ValueError(
-                    f"Process {child.name} already a parent to "
+                    f"Process {child.name} already a child to "
                     f"process {self.name}"
                 )
 
