@@ -18,7 +18,7 @@ class StreamingInferenceProcess(Process):
         self._stop_event = Event()
 
         self._in_q = JoinableQueue()
-        self._metrics_q = Queue()
+        self._metric_q = Queue()
         super().__init__(name=name)
 
     def add_parent(
@@ -204,7 +204,7 @@ class StreamingInferenceProcess(Process):
             if ready_objs is None:
                 if self.paused:
                     try:
-                        command = self.in_q.get()
+                        command = self._in_q.get()
                     except queue.Empty:
                         continue
 

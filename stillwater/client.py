@@ -230,6 +230,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             request_id=str(self._request_id),
             sequence_start=self._request_id == 1,
             sequence_id=self.sequence_id,
+            timeout=20
         )
 
     def reset(self):

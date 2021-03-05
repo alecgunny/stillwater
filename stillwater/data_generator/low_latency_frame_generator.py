@@ -80,7 +80,7 @@ class LowLatencyFrameGenerator(DataGenerator):
         file_pattern: typing.Optional[str] = None,
         name: str = None,
     ) -> None:
-        t0, path_pattern = self._get_t0_and_path(data_dir, t0, file_pattern)
+        t0, path_pattern = self._get_t0_and_path(data_dir, file_pattern, t0)
 
         generator_fn = LowLatencyFrameGeneratorFn(
             path_pattern,
