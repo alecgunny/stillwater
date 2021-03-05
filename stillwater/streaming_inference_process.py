@@ -1,6 +1,7 @@
+import queue
 import sys
 import typing
-from multiprocessing import Event, Pipe, Process
+from multiprocessing import Event, JoinableQueue, Pipe, Process, Queue
 
 from stillwater.utils import ExceptionWrapper, Relatives, sync_recv
 
@@ -15,6 +16,9 @@ class StreamingInferenceProcess(Process):
 
         self._pause_event = Event()
         self._stop_event = Event()
+
+        self._in_q = JoinableQueue()
+        self._metrics_q = Queue()
         super().__init__(name=name)
 
     def add_parent(
@@ -143,6 +147,14 @@ class StreamingInferenceProcess(Process):
     def unpause(self) -> None:
         self._pause_event.clear()
 
+    def clear(self):
+        for parent in self._parents:
+            while parent.poll():
+                _ = parent.recv()
+
+    def reset(self):
+        self.clear()
+
     def _break_glass(self, exception: Exception) -> None:
         """
         Our way out in case any exceptions get
@@ -155,6 +167,7 @@ class StreamingInferenceProcess(Process):
         """
         if not isinstance(exception, ExceptionWrapper):
             exception = ExceptionWrapper(exception)
+
         print(exception)
         self.stop()
         for child in self._children:
@@ -190,9 +203,17 @@ class StreamingInferenceProcess(Process):
             ready_objs = self._get_data()
             if ready_objs is None:
                 if self.paused:
-                    # TODO: introduce code for updating parameters
-                    # when paused
-                    self.unpause()
+                    try:
+                        command = self.in_q.get()
+                    except queue.Empty:
+                        continue
+
+                    if command == "reset":
+                        self.reset()
+                    else:
+                        raise ValueError(f"Unknown command {command}")
+                    self.in_q.task_done()
+
                 continue
             self._do_stuff_with_data(ready_objs)
 

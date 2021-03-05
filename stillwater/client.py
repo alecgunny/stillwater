@@ -43,7 +43,6 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         self.url = url
         self.model_name = model_name
         self.model_version = model_version
-        self._start_times = {}
 
         if not isinstance(sequence_id, int):
             if sequence_id is None:
@@ -97,8 +96,6 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             triton.InferRequestedOutput(output.name)
             for output in model_metadata.outputs
         ]
-        self._send_times = {}
-        self._av_send_time = 0.0
 
     def add_parent(
         self,
@@ -152,18 +149,25 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             return
 
         id = int(result.get_response().id)
-        t0 = self._start_times.pop(id)
+        message_t0 = self._start_times.pop(id)
         send_t0 = self._send_times.pop(id)
+        tf = gps_time()
 
-        end_time = gps_time()
-        self._av_send_time += (end_time - send_t0 - self._av_send_time) / id
+        self._metric_q.put(("latency", tf - message_t0))
+        self._metric_q.put(("round_trip", tf - send_t0))
+        self._metric_q.put(("preproc", send_t0 - message_t0))
+        self._metric_q.put(("throughput", id / (tf - self._start_time)))
 
-        latency = end_time - t0
-        throughput = id / (end_time - self._start_time)
         for name in self._children._fields:
             x = result.as_numpy(name)
             conn = getattr(self._children, name)
-            conn.send(Package(x, (latency, throughput)))
+            conn.send(Package(x, message_t0))
+
+    def _initialize_run(self):
+        self._start_time = gps_time()
+        self._request_id = 0
+        self._start_times = {}
+        self._send_times = {}
 
     def _main_loop(self):
         # first make sure we've plugged in all the necessary
@@ -189,11 +193,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         # anything goes awry
         with triton.InferenceServerClient(url=self.url) as self.client:
             self.client.start_stream(callback=self._callback, stream_timeout=60)
-
-            # measure the stream start time as a
-            # point of reference for profiling purposes
-            self._start_time = gps_time()
-            self._request_id = 0
+            self._initialize_run()
             super()._main_loop()
 
     def _do_stuff_with_data(self, objs):
@@ -231,6 +231,10 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             sequence_start=self._request_id == 1,
             sequence_id=self.sequence_id,
         )
+
+    def reset(self):
+        self._initialize_run()
+        super().reset()
 
     def get_inference_stats(self):
         with triton.InferenceServerClient(self.url) as client:

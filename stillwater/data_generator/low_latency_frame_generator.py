@@ -63,9 +63,8 @@ class LowLatencyFrameGeneratorFn:
         # return the next piece of data
         x = self.data[:, start:stop]
 
-        # offset the frame's initial time by the
-        # time corresponding to the first sample
-        # of stream
+        # offset the frame's initial time by the time
+        # corresponding to the first sample of stream
         t0 = self._latency_t0 + idx * self.kernel_stride
         return Package(x=x, t0=t0)
 
@@ -81,6 +80,30 @@ class LowLatencyFrameGenerator(DataGenerator):
         file_pattern: typing.Optional[str] = None,
         name: str = None,
     ) -> None:
+        t0, path_pattern = self._get_t0_and_path(data_dir, t0, file_pattern)
+
+        generator_fn = LowLatencyFrameGeneratorFn(
+            path_pattern,
+            t0 + 0,
+            kernel_stride,
+            sample_rate,
+            channels,
+        )
+        idx_range = int(1 / kernel_stride) + 1
+        super().__init__(generator_fn, idx_range, name)
+
+    def reset(self):
+        super().reset()
+
+        t0, _ = self._get_t0_and_path(
+            os.path.dirname(self._generator_fn.path_pattern),
+            os.path.basename(self._generator_fn.path_pattern),
+            None,
+        )
+        self._generator_fn.data = None
+        self._generator_fn.t0 = t0
+
+    def _get_t0_and_path(self, data_dir, file_pattern, t0):
         if file_pattern is None and t0 is None:
             raise ValueError(
                 "Must specify either a file pattern or initial timestamp"
@@ -115,13 +138,4 @@ class LowLatencyFrameGenerator(DataGenerator):
                 )
             timestamps = [int(t.group(0)) for t in timestamps if t is not None]
             t0 = max(timestamps)
-
-        generator_fn = LowLatencyFrameGeneratorFn(
-            os.path.join(data_dir, file_pattern),
-            t0 + 0,
-            kernel_stride,
-            sample_rate,
-            channels,
-        )
-        idx_range = int(1 / kernel_stride) + 1
-        super().__init__(generator_fn, idx_range, name)
+        return t0, os.path.join(data_dir, file_pattern)
