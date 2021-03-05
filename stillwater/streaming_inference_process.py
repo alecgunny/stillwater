@@ -165,6 +165,10 @@ class StreamingInferenceProcess(Process):
         at the exitcode to know that this didn't
         end pleasantly
         """
+        # TODO: I don't think this should ever be
+        # an ExceptionWrapper: we should be here because
+        # an exception got raised, or an ExceptionWrapper
+        # reraised its exception.
         if not isinstance(exception, ExceptionWrapper):
             exception = ExceptionWrapper(exception)
 

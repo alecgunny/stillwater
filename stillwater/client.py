@@ -188,28 +188,38 @@ class StreamingInferenceClient(StreamingInferenceProcess):
                 "missing outputs {}".format(", ".join(missing_outputs))
             )
 
-        # call the main loop within a client context
-        # to make sure the client stream closes if
-        # anything goes awry
+        # call the main loop within a client context to make
+        # sure the client stream closes if anything goes awry
         with triton.InferenceServerClient(url=self.url) as self.client:
             self.client.start_stream(callback=self._callback, stream_timeout=60)
             self._initialize_run()
             super()._main_loop()
 
     def _do_stuff_with_data(self, objs):
-        t0 = 0
         assert len(objs) == len(self.inputs)
 
-        x = []
+        x, t0 = [], 0
+
+        # if we're using streams, the order matters since
+        # we need to concatenate them. Otherwise we'll just
+        # grab the appropriate input and set its value
         streams = self.streams or objs.keys()
         for stream in streams:
             package = objs[stream]
-            t0 += package.t0
             if self.streams is None:
                 self._inputs[stream].set_data_from_numpy(package.x[None])
             else:
                 x.append(package.x[None])
 
+            # use the average of package creation times as
+            # the value for latency measurement. Shouldn't
+            # make a different for most practical use cases
+            # since these should be the same (in fact it's
+            # probably worth checking to ensure that)
+            t0 += package.t0
+
+        # concatenate streams if we have them and
+        # set the stream input
         if len(x) > 0:
             if len(x) > 1:
                 x = np.concatenate(x, axis=1)
@@ -230,11 +240,18 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             request_id=str(self._request_id),
             sequence_start=self._request_id == 1,
             sequence_id=self.sequence_id,
-            timeout=20
+            timeout=20,
         )
 
     def reset(self):
+        # wait for all in-flight requests to return
+        while self._start_times:
+            time.sleep(0.01)
+
+        # reinitialize metric trackers
         self._initialize_run()
+
+        # clear the input qs
         super().reset()
 
     def get_inference_stats(self):
