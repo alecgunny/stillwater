@@ -33,9 +33,9 @@ class LowLatencyFrameGeneratorFn:
             # if it takes more than a second to get created,
             # then assume the worst and raise an error
             start_time = time.time()
+            path = self.path_pattern.format(self.t0)
             while time.time() - start_time < 3:
                 try:
-                    path = self.path_pattern.format(self.t0)
                     data = TimeSeriesDict.read(path, self.channels)
                     break
                 except FileNotFoundError:
@@ -92,16 +92,17 @@ class LowLatencyFrameGenerator(DataGenerator):
         idx_range = int(1 / kernel_stride) + 1
         super().__init__(generator_fn, idx_range, name)
 
-    def reset(self):
+    def reset(self, t0=None):
         super().reset()
 
         t0, _ = self._get_t0_and_path(
             os.path.dirname(self._generator_fn.path_pattern),
             os.path.basename(self._generator_fn.path_pattern),
-            None,
+            t0,
         )
         self._generator_fn.data = None
         self._generator_fn.t0 = t0
+        return t0
 
     def _get_t0_and_path(self, data_dir, file_pattern, t0):
         if file_pattern is None and t0 is None:

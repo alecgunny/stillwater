@@ -149,7 +149,13 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             return
 
         id = int(result.get_response().id)
-        message_t0 = self._start_times.pop(id)
+        try:
+            message_t0 = self._start_times.pop(id)
+        except KeyError:
+            # this is here because of issues with pausing,
+            # but is a terrible solution and TODO: needs to
+            # be sorted out
+            return
         send_t0 = self._send_times.pop(id)
         tf = gps_time()
 
@@ -245,8 +251,8 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
     def reset(self):
         # wait for all in-flight requests to return
-        while self._start_times:
-            time.sleep(0.01)
+        while self.client._stream._request_queue.qsize() > 0:
+            time.sleep(0.001)
 
         # reinitialize metric trackers
         self._initialize_run()

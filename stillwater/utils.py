@@ -90,10 +90,11 @@ class Package:
 
 
 @pickling_support.install
-class ExceptionWrapper:
-    def __init__(self, exc: Exception) -> None:
-        self.exc = exc
+class ExceptionWrapper(Exception):
+    def __init__(self, msg: Exception) -> None:
+        self.exc = msg
         _, __, self.tb = sys.exc_info()
+        super().__init__(str(msg))
 
     def reraise(self) -> None:
         raise self.exc.with_traceback(self.tb)

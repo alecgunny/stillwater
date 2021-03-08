@@ -144,8 +144,9 @@ class StreamingInferenceProcess(Process):
     def pause(self) -> None:
         self._pause_event.set()
 
-    def unpause(self) -> None:
+    def resume(self) -> None:
         self._pause_event.clear()
+        print(f"Resumed process {self.name}")
 
     def clear(self):
         for parent in self._parents:
@@ -204,22 +205,31 @@ class StreamingInferenceProcess(Process):
 
     def _main_loop(self):
         while not self.stopped:
-            ready_objs = self._get_data()
-            if ready_objs is None:
-                if self.paused:
-                    try:
-                        command = self._in_q.get()
-                    except queue.Empty:
-                        continue
+            if self.paused:
+                try:
+                    command = self._in_q.get()
+                except queue.Empty:
+                    continue
 
-                    if command == "reset":
-                        self.reset()
-                    else:
-                        raise ValueError(f"Unknown command {command}")
-                    self.in_q.task_done()
+                if not isinstance(command, str):
+                    command, kwargs = command
+                else:
+                    kwargs = {}
 
+                if command == "reset":
+                    result = self.reset(**kwargs)
+                else:
+                    raise ValueError(f"Unknown command {command}")
+
+                self._in_q.task_done()
+                if result is not None:
+                    self._in_q.put(result)
+                    self._in_q.join()
                 continue
-            self._do_stuff_with_data(ready_objs)
+
+            ready_objs = self._get_data()
+            if ready_objs is not None:
+                self._do_stuff_with_data(ready_objs)
 
     def _do_stuff_with_data(self, objs):
         """
