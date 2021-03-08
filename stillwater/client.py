@@ -156,6 +156,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             # but is a terrible solution and TODO: needs to
             # be sorted out
             return
+
         send_t0 = self._send_times.pop(id)
         tf = gps_time()
 
@@ -236,7 +237,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         t0 /= len(objs)
 
         self._request_id += 1
-        self._send_times[self._request_id + 0] = time.time()
+        self._send_times[self._request_id + 0] = gps_time()
         self._start_times[self._request_id + 0] = t0
 
         self.client.async_stream_infer(
@@ -247,6 +248,10 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             sequence_start=self._request_id == 1,
             sequence_id=self.sequence_id,
             timeout=20,
+        )
+
+        self._metric_q.put(
+            ("request_rate", self._request_id / (gps_time() - self._start_time))
         )
 
     def reset(self):

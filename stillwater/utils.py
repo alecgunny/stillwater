@@ -9,14 +9,22 @@ import attr
 import numpy as np
 from tblib import pickling_support
 
-_GPS_EPOCH = datetime.datetime(1980, 1, 6, 0, 0, 0).timestamp()
+try:
+    from gwpy.time import to_gps
+
+    def gps_time():
+        gps = to_gps(datetime.datetime.now(tz=datetime.timezone.utc))
+        return gps.seconds + gps.nanoseconds * 10 ** -9
 
 
-def gps_time():
-    """
-    TODO: why are these off?
-    """
-    return time.time()  # datetime.datetime.utcnow().timestamp() - _GPS_EPOCH + 7
+except ImportError:
+    _GPS_EPOCH = datetime.datetime(1980, 1, 6, 0, 0, 0).timestamp()
+    _NUM_LEAP_SECONDS = 18
+
+    def gps_time():
+        return (
+            datetime.datetime.utcnow().timestamp() - _GPS_EPOCH
+        ) + _NUM_LEAP_SECONDS
 
 
 class ObjectMappingTuple:

@@ -1,3 +1,4 @@
+import datetime
 import os
 import re
 import time
@@ -5,10 +6,24 @@ import typing
 
 import attr
 import numpy as np
+from gwpy.time import to_gps
 from gwpy.timeseries import TimeSeriesDict
 
 from stillwater.data_generator import DataGenerator
 from stillwater.utils import Package
+
+
+def _get_file_gps_timestamp(fname):
+    # subtract one from file creation time to
+    # account for the latency incurred by waiting
+    # for the file to be created
+    file_creation_timestamp = os.stat(fname).st_ctime - 1
+    file_creation_datetime = datetime.datetime.fromtimestamp(
+        file_creation_timestamp, tz=datetime.timezone.utc
+    )
+
+    gps = to_gps(file_creation_datetime)
+    return gps.seconds + gps.nanosecons * 10 ** -9
 
 
 @attr.s(auto_attribs=True)
@@ -42,7 +57,7 @@ class LowLatencyFrameGeneratorFn:
                     continue
             else:
                 raise ValueError(f"Couldn't find next timestep file {path}")
-            self._latency_t0 = os.stat(path).st_ctime - 1
+            self._latency_t0 = _get_file_gps_timestamp(path)
 
             # resample the data and turn it into a numpy array
             data.resample(self.sample_rate)
