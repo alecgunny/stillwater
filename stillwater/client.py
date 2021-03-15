@@ -23,6 +23,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         model_version: int,
         name: str,
         sequence_id: typing.Optional[typing.Union[int, str]] = None,
+        qps_limit: typing.Optional[int] = None
     ) -> None:
         # do a few checks on the server to make sure
         # we'll be good to go
@@ -43,6 +44,10 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         self.url = url
         self.model_name = model_name
         self.model_version = model_version
+        if qps_limit is not None:
+            self._wait_time = 1 / qps_limit - 1e-5
+        else:
+            self._wait_time = None
 
         if not isinstance(sequence_id, int):
             if sequence_id is None:
@@ -141,9 +146,10 @@ class StreamingInferenceClient(StreamingInferenceProcess):
     def _callback(self, result, error):
         # raise the error if anything went wrong
         if error is not None:
-            print(error)
             for conn in self._children:
-                exc = ExceptionWrapper(RuntimeError(error))
+                exc = ExceptionWrapper(
+                    RuntimeError("Server returned error: " + str(error))
+                )
                 conn.send(exc)
             self.stop()
             return
@@ -162,7 +168,6 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         self._metric_q.put(("latency", tf - message_t0))
         self._metric_q.put(("round_trip", tf - send_t0))
-        self._metric_q.put(("preproc", send_t0 - message_t0))
         self._metric_q.put(("throughput", id / (tf - self._start_time)))
 
         for name in self._children._fields:
@@ -172,6 +177,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
     def _initialize_run(self):
         self._start_time = gps_time()
+        self._last_request_time = time.time()
         self._request_id = 0
         self._start_times = {}
         self._send_times = {}
@@ -203,6 +209,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             super()._main_loop()
 
     def _do_stuff_with_data(self, objs):
+        _start_time = time.time()
         assert len(objs) == len(self.inputs)
 
         x, t0 = [], 0
@@ -236,10 +243,17 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         t0 /= len(objs)
 
+        self._metric_q.put(("preproc", time.time() - _start_time))
+        if self._wait_time is not None:
+            while (
+                (time.time() - self._last_request_time) < self._wait_time
+            ):
+                time.sleep(1e-6)
+
         self._request_id += 1
         self._send_times[self._request_id + 0] = gps_time()
         self._start_times[self._request_id + 0] = t0
-
+ 
         self.client.async_stream_infer(
             self.model_name,
             inputs=list(self._inputs.values()),
@@ -247,9 +261,10 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             request_id=str(self._request_id),
             sequence_start=self._request_id == 1,
             sequence_id=self.sequence_id,
-            timeout=20,
+            timeout=60,
         )
 
+        self._last_request_time = time.time()
         self._metric_q.put(
             ("request_rate", self._request_id / (gps_time() - self._start_time))
         )

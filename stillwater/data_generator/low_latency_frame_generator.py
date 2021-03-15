@@ -18,12 +18,13 @@ def _get_file_gps_timestamp(fname):
     # account for the latency incurred by waiting
     # for the file to be created
     file_creation_timestamp = os.stat(fname).st_ctime - 1
-    file_creation_datetime = datetime.datetime.fromtimestamp(
-        file_creation_timestamp, tz=datetime.timezone.utc
-    )
-
-    gps = to_gps(file_creation_datetime)
-    return gps.seconds + gps.nanosecons * 10 ** -9
+    return file_creation_timestamp
+#     file_creation_datetime = datetime.datetime.fromtimestamp(
+#         file_creation_timestamp, tz=datetime.timezone.utc
+#     )
+# 
+#     gps = to_gps(file_creation_datetime)
+#     return gps.seconds + gps.nanoseconds * 10 ** -9
 
 
 @attr.s(auto_attribs=True)

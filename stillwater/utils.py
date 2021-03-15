@@ -27,6 +27,10 @@ except ImportError:
         ) + _NUM_LEAP_SECONDS
 
 
+def gps_time():
+    return time.time()
+
+
 class ObjectMappingTuple:
     """
     Utility class for creating namedtuples capable
