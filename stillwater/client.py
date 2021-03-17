@@ -23,7 +23,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         model_version: int,
         name: str,
         sequence_id: typing.Optional[typing.Union[int, str]] = None,
-        qps_limit: typing.Optional[int] = None
+        qps_limit: typing.Optional[int] = None,
     ) -> None:
         # do a few checks on the server to make sure
         # we'll be good to go
@@ -165,10 +165,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         send_t0 = self._send_times.pop(id)
         tf = gps_time()
-
-        self._metric_q.put(("latency", tf - message_t0))
-        self._metric_q.put(("round_trip", tf - send_t0))
-        self._metric_q.put(("throughput", id / (tf - self._start_time)))
+        self._metric_q.put((message_t0, send_t0, tf))
 
         for name in self._children._fields:
             x = result.as_numpy(name)
@@ -176,7 +173,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             conn.send(Package(x, message_t0))
 
     def _initialize_run(self):
-        self._start_time = gps_time()
+        self._metric_q.put(("start_time", gps_time()))
         self._last_request_time = time.time()
         self._request_id = 0
         self._start_times = {}
@@ -209,7 +206,6 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             super()._main_loop()
 
     def _do_stuff_with_data(self, objs):
-        _start_time = time.time()
         assert len(objs) == len(self.inputs)
 
         x, t0 = [], 0
@@ -243,17 +239,14 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         t0 /= len(objs)
 
-        self._metric_q.put(("preproc", time.time() - _start_time))
         if self._wait_time is not None:
-            while (
-                (time.time() - self._last_request_time) < self._wait_time
-            ):
+            while (time.time() - self._last_request_time) < self._wait_time:
                 time.sleep(1e-6)
 
         self._request_id += 1
         self._send_times[self._request_id + 0] = gps_time()
         self._start_times[self._request_id + 0] = t0
- 
+
         self.client.async_stream_infer(
             self.model_name,
             inputs=list(self._inputs.values()),
@@ -265,9 +258,6 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         )
 
         self._last_request_time = time.time()
-        self._metric_q.put(
-            ("request_rate", self._request_id / (gps_time() - self._start_time))
-        )
 
     def reset(self):
         # wait for all in-flight requests to return
