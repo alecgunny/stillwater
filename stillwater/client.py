@@ -164,7 +164,9 @@ class StreamingInferenceClient(StreamingInferenceProcess):
     def _initialize_run(self):
         self._metric_q.put(("start_time", gps_time()))
         self._last_request_time = time.time()
-        self._request_id = 0
+        self._request_id = random.randint(0, 1e9)
+        self._sequence_start = True
+
         self._start_times = {}
         self._recv_times = {}
         self._send_times = {}
@@ -243,7 +245,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
             # use the average of package creation times as
             # the value for latency measurement. Shouldn't
-            # make a different for most practical use cases
+            # make a difference for most practical use cases
             # since these should be the same (in fact it's
             # probably worth checking to ensure that)
             t0 += package.t0
@@ -263,25 +265,26 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             while (time.time() - self._last_request_time) < self._wait_time:
                 time.sleep(1e-6)
 
-        self._request_id += 1
-        self._send_times[self._request_id + 0] = gps_time()
-        self._start_times[self._request_id + 0] = t0
+        self._send_times[self._request_id] = gps_time()
+        self._start_times[self._request_id] = t0
 
         self.client.async_stream_infer(
             self.model_name,
             inputs=list(self._inputs.values()),
             outputs=self.outputs,
             request_id=str(self._request_id),
-            sequence_start=self._request_id == 1,
+            sequence_start=self._sequence_start,
             sequence_id=self.sequence_id,
             timeout=60,
         )
 
+        self._sequence_start = False
         self._last_request_time = time.time()
+        self._request_id = random.randint(0, 1e9)
 
     def _get_data(self):
         stuff = super()._get_data()
-        self._recv_times[self._request_id + 1] = gps_time()
+        self._recv_times[self._request_id] = gps_time()
         return stuff
 
     def reset(self):
