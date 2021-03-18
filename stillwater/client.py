@@ -1,8 +1,8 @@
-import ctypes
 import random
 import string
 import time
 import typing
+import zlib
 
 import numpy as np
 import tritonclient.grpc as triton
@@ -22,45 +22,42 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         model_name: str,
         model_version: int,
         name: str,
-        sequence_id: typing.Optional[typing.Union[int, str]] = None,
+        sequence_id: typing.Optional[typing.Union[int, str, bytes]] = None,
         qps_limit: typing.Optional[int] = None,
     ) -> None:
-        # do a few checks on the server to make sure
-        # we'll be good to go
+        # do a few checks on the server to make sure we'll be good to go
         try:
             client = triton.InferenceServerClient(url)
+
+            if not client.is_server_live():
+                raise RuntimeError(f"Server at url {url} isn't live")
+            if not client.is_model_ready(model_name):
+                raise RuntimeError(
+                    f"Model {model_name} isn't ready at server url {url}"
+                )
         except triton.InferenceServerException:
-            raise RuntimeError(
-                "Couldn't connect to server at specified " "url {}".format(url)
-            )
-        if not client.is_server_live():
-            raise RuntimeError("Server at url {} isn't live".format(url))
-        if not client.is_model_ready(model_name):
-            raise RuntimeError(
-                "Model {} isn't ready at server url {}".format(model_name, url)
-            )
+            raise RuntimeError(f"Couldn't connect to server at {url}")
         super().__init__(name)
 
         self.url = url
         self.model_name = model_name
         self.model_version = model_version
+
+        # add a throttle
         if qps_limit is not None:
             self._wait_time = 1 / qps_limit - 1e-5
         else:
             self._wait_time = None
 
+        # try to map sequence_id types to an int
         if not isinstance(sequence_id, int):
             if sequence_id is None:
                 random_string = "".join(random.choices(string.printable, k=16))
-                sequence_id = hash(random_string)
-            elif isinstance(sequence_id, str):
-                # TODO: won't be repeatable between different
-                # runs of the same script: is that a problem?
-                sequence_id = hash(sequence_id)
+                sequence_id = zlib.adler32(bytes(random_string))
+            elif isinstance(sequence_id, (str, bytes)):
+                sequence_id = zlib.adler32(bytes(sequence_id))
             else:
                 raise ValueError(f"Invalid sequence id {sequence_id}")
-            # map to positive int
-            sequence_id = ctypes.c_size_t(sequence_id).value
         self.sequence_id = sequence_id
 
         # use the server to tell us what inputs and
@@ -82,9 +79,15 @@ class StreamingInferenceClient(StreamingInferenceProcess):
                 "stream_channels"
             ].string_value.split(",")
         except KeyError:
+            # no stream channels were specified, so our
+            # inputs are as reported by model metadata
             self.inputs = self._inputs
             self.streams = None
         else:
+            # we have some stream channels, so figure out
+            # how big each one is supposed to be from the
+            # corresponding model info and expose them
+            # as inputs to the client
             self.inputs = {}
             for stream in self.streams:
                 input_model_name, input_name = stream.split("/")
@@ -97,15 +100,20 @@ class StreamingInferenceClient(StreamingInferenceProcess):
                     input.name, shape, input.datatype
                 )
 
+        # TODO: will need to implement similar logic once
+        # output snapshotting is made functional
         self.outputs = [
             triton.InferRequestedOutput(output.name)
             for output in model_metadata.outputs
         ]
 
+        self.input_map, self.output_map = {}, {}
+
     def add_parent(
         self,
         parent: typing.Union[str, "Process"],
         conn: typing.Optional["Connection"] = None,
+        input_name: typing.Optional[str] = None,
     ):
         """
         Override these methods in order to match process
@@ -118,34 +126,48 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             parent_name = parent.name
         except AttributeError:
             parent_name = parent
-        if parent_name not in self.inputs:
+
+        input_name = input_name or parent_name
+        if input_name not in self.inputs:
             raise ValueError(
                 "Tried to add data source named {} "
                 "to inference client expecting "
                 "sources {}".format(parent_name, ", ".join(self.inputs.keys()))
             )
+
+        self.input_map[input_name] = parent_name
         return super().add_parent(parent, conn)
 
     def add_child(
         self,
         child: typing.Union[str, "Process"],
         conn: typing.Optional["Connection"] = None,
+        output_name: typing.Optional[str] = None,
     ):
         try:
             child_name = child.name
         except AttributeError:
             child_name = child
 
+        output_name = output_name or child_name
         output_names = [x.name() for x in self.outputs]
-        output_names = [x for x in output_names if child_name.startswith(x)]
-        if len(output_names) == 0:
+        if child_name not in output_names:
             raise ValueError(
                 "Tried to add output named {} "
                 "to inference client expecting "
                 "outputs {}".format(child_name, ", ".join(self.inputs.keys()))
             )
-        super().add_child(child, conn)
-        self._children
+
+        self.output_map[output_name] = child_name
+        return super().add_child(child, conn)
+
+    def _initialize_run(self):
+        self._metric_q.put(("start_time", gps_time()))
+        self._last_request_time = time.time()
+        self._request_id = 0
+        self._start_times = {}
+        self._recv_times = {}
+        self._send_times = {}
 
     def _callback(self, result, error):
         # raise the error if anything went wrong
@@ -172,24 +194,16 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         tf = gps_time()
         self._metric_q.put((message_t0, recv_t0, send_t0, tf))
 
-        for name in self._children._fields:
-            x = result.as_numpy(name)
-            conn = getattr(self._children, name)
+        for output_name, child_name in self.output_map.items():
+            x = result.as_numpy(output_name)
+            conn = getattr(self._children, child_name)
             conn.send(Package(x, message_t0))
-
-    def _initialize_run(self):
-        self._metric_q.put(("start_time", gps_time()))
-        self._last_request_time = time.time()
-        self._request_id = 0
-        self._start_times = {}
-        self._recv_times = {}
-        self._send_times = {}
 
     def _main_loop(self):
         # first make sure we've plugged in all the necessary
         # input data streams, and have places to send all
         # the necessary outputs
-        missing_sources = set(self.inputs) - set(self._parents._fields)
+        missing_sources = set(self.inputs) - set(self.input_map)
         if not len(missing_sources) == 0:
             raise RuntimeError(
                 "Couldn't start inference client process, "
@@ -197,7 +211,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             )
 
         output_names = set([x.name() for x in self.outputs])
-        missing_outputs = output_names - set(self._children._fields)
+        missing_outputs = output_names - set(self.output_map)
         if not len(missing_outputs) == 0:
             raise RuntimeError(
                 "Couldn't start inference client process, "
@@ -221,7 +235,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         # grab the appropriate input and set its value
         streams = self.streams or objs.keys()
         for stream in streams:
-            package = objs[stream]
+            package = objs[self.input_map[stream]]
             if self.streams is None:
                 self._inputs[stream].set_data_from_numpy(package.x[None])
             else:
@@ -280,16 +294,3 @@ class StreamingInferenceClient(StreamingInferenceProcess):
 
         # clear the input qs
         super().reset()
-
-    def get_inference_stats(self):
-        with triton.InferenceServerClient(self.url) as client:
-            model_config = client.get_model_config(self.model_name).config
-            models = [i.model_name for i in model_config.ensemble_scheduling.step]
-            if len(models) == 0:
-                models = [model_config.name]
-
-            stats = {}
-            for model in models:
-                s = client.get_inference_statistics(model).model_stats
-                stats[model] = s[0].inference_stats
-        return stats
