@@ -135,13 +135,17 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             child_name = child.name
         except AttributeError:
             child_name = child
-        if child_name not in [x.name() for x in self.outputs]:
+
+        output_names = [x.name() for x in self.outputs]
+        output_names = [x for x in output_names if child_name.startswith(x)]
+        if len(output_names) == 0:
             raise ValueError(
                 "Tried to add output named {} "
                 "to inference client expecting "
                 "outputs {}".format(child_name, ", ".join(self.inputs.keys()))
             )
-        return super().add_child(child, conn)
+        super().add_child(child, conn)
+        self._children
 
     def _callback(self, result, error):
         # raise the error if anything went wrong
@@ -164,8 +168,9 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             return
 
         send_t0 = self._send_times.pop(id)
+        recv_t0 = self._recv_times.pop(id)
         tf = gps_time()
-        self._metric_q.put((message_t0, send_t0, tf))
+        self._metric_q.put((message_t0, recv_t0, send_t0, tf))
 
         for name in self._children._fields:
             x = result.as_numpy(name)
@@ -177,6 +182,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         self._last_request_time = time.time()
         self._request_id = 0
         self._start_times = {}
+        self._recv_times = {}
         self._send_times = {}
 
     def _main_loop(self):
@@ -258,6 +264,11 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         )
 
         self._last_request_time = time.time()
+
+    def _get_data(self):
+        stuff = super()._get_data()
+        self._recv_times[self._request_id + 1] = gps_time()
+        return stuff
 
     def reset(self):
         # wait for all in-flight requests to return

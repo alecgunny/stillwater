@@ -17,7 +17,10 @@ class DummyDataGeneratorFn:
 
     def __call__(self, idx):
         if self.generation_rate is not None:
-            if (gps_time() - self._last_time) < (1 / self.generation_rate):
+            if (
+                (gps_time() - self._last_time) <
+                (1 / self.generation_rate - 1e-4)
+            ):
                 return
 
         x = np.random.randn(*self.shape).astype("float32")
