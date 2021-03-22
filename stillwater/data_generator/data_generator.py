@@ -2,23 +2,14 @@ import typing
 
 
 class DataGenerator:
-    def __init__(
-        self, generator_fn: typing.Callable, idx_range: int, name: str
-    ) -> None:
-        self._generator_fn = generator_fn
-        self.idx = 0
-        self.idx_range = idx_range
+    def __init__(self, name=None):
         self.name = name
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        try:
-            return self._generator_fn(self.idx)
-        except IndexError:
-            self.idx = 0
-            return self._generator_fn(self.idx)
+        raise NotImplementedError
 
     def stop(self):
         return
@@ -26,10 +17,11 @@ class DataGenerator:
 
 class MultiSourceGenerator(DataGenerator):
     def __init__(self, data_generators, name=None):
-        def generator_fn(idx):
-            packages = {}
-            for gen in data_generators:
-                packages[gen.name] = gen._generator_fn(idx)
-            return packages
+        self._data_generators = [iter(d) for d in data_generators]
+        super().__init__(name)
 
-        super().__init__(generator_fn, data_generators[0].idx_range, name)
+    def __next__(self):
+        packages = {}
+        for gen in self._data_generators:
+            packages[gen.name] = next(gen)
+        return packages

@@ -1,32 +1,10 @@
+import time
 import typing
 
-import attr
 import numpy as np
 
 from stillwater.data_generator import DataGenerator
 from stillwater.utils import Package, gps_time
-
-
-@attr.s(auto_attribs=True)
-class DummyDataGeneratorFn:
-    shape: typing.Tuple[int, ...]
-    generation_rate: typing.Optional[float]
-
-    def __attrs_post_init__(self):
-        self._last_time = gps_time()
-
-    def __call__(self, idx):
-        if self.generation_rate is not None:
-            if (
-                (gps_time() - self._last_time) <
-                (1 / self.generation_rate - 1e-4)
-            ):
-                return
-
-        x = np.random.randn(*self.shape).astype("float32")
-        package = Package(x=x, t0=gps_time())
-        self._last_time = package.t0
-        return package
 
 
 class DummyDataGenerator(DataGenerator):
@@ -36,5 +14,20 @@ class DummyDataGenerator(DataGenerator):
         name: str,
         generation_rate: typing.Optional[float] = None,
     ) -> None:
-        generator_fn = DummyDataGeneratorFn(shape, generation_rate)
-        super().__init__(generator_fn, 1, name)
+        super().__init__(name=name)
+        self.shape = shape
+        if generation_rate is not None:
+            self._sleep_time = 1 / generation_rate - 1e-4
+        else:
+            self._sleep_time = None
+        self._last_time = time.time()
+
+    def __next__(self):
+        if self.generation_rate is not None:
+            while (time.time() - self._last_time) < self._sleep_time:
+                time.sleep(1e-6)
+
+        x = np.random.randn(*self.shape).astype("float32")
+        package = Package(x=x, t0=gps_time())
+        self._last_time = package.t0
+        return package
