@@ -39,7 +39,7 @@ class MonitoredMetricViolationException(Exception):
 # TODO: can we just do this in the init of the exception?
 # will that screw things up with ExceptionWrapper?
 def _raise_exception(metric, limit, value):
-    return MonitoredMetricViolationException(
+    raise MonitoredMetricViolationException(
         f"Metric {metric} violated limit {limit} with value {value}"
     )
 
@@ -65,6 +65,12 @@ class ThreadedStatWriter(Thread):
         self._error_q = Queue()
         super().__init__()
 
+        # TODO: make configurable
+        self._grace_period = 10000
+        self._n = 0
+        self._sustain = 500
+        self._steps_since_violation_started = 0
+
     def monitor(self, values):
         for metric, value in values.items():
             try:
@@ -72,8 +78,19 @@ class ThreadedStatWriter(Thread):
             except KeyError:
                 continue
 
-            if self.quantities[metric](limit, value) == value:
+            if (
+                self.quantities[metric](limit, value) == limit and
+                self._n >= self._grace_period and
+                self._steps_since_violation_started >= self._sustain
+            ):
                 _raise_exception(metric, limit, value)
+            elif (
+                self.quantities[metric](limit, value) == limit and
+                self._n >= self._grace_period
+            ):
+                self._steps_since_violation_started += 1
+            elif self.quantities[metric](limit, value) == value:
+                self._steps_since_violation_started = 0
 
     @property
     def stopped(self) -> bool:
@@ -120,7 +137,10 @@ class ThreadedStatWriter(Thread):
                 try:
                     values = self._get_values()
                     if f is None or values is None:
+                        if values is not None:
+                            self._n += 1
                         continue
+                    self._n += 1
 
                     if not isinstance(values[0], list):
                         values = [values]
@@ -197,8 +217,8 @@ class ServerStatsMonitor(ThreadedStatWriter):
     def _get_values(self):
         response = requests.get(self.url)
         new_time = time.time()
-        interval = self._last_time - new_time
-        self._last_time = time.time()
+        interval = new_time - self._last_time
+        self._last_time = new_time
 
         content = response.content.decode("utf-8").split("\n")
         util_rows = self._filter_rows_by_start(content, "nv_gpu_utilization")
