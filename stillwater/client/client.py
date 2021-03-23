@@ -39,13 +39,17 @@ class _Callback:
         message_t0 = self.message_start_times.pop(request_id)
         send_t0 = self.request_start_times.pop(request_id)
         tf = gps_time()
-        self._metric_q.put((message_t0, send_t0, tf))
 
-        return self.sequence_id_map.pop(request_id), message_t0
+        sequence_id = self.sequence_id_map.pop(request_id)
+        self._metric_q.put((sequence_id, message_t0, send_t0, tf))
+
+        return sequence_id, message_t0
 
     def __call__(self, result, error):
         # raise the error if anything went wrong
         if error is not None:
+            if isinstance(error, triton.InferenceServerException):
+                error = RuntimeError(str(error))
             exc = ExceptionWrapper(error)
             for conn in self.source_map.values():
                 conn.send(exc)
@@ -54,12 +58,13 @@ class _Callback:
         request_id = int(result.get_response().id)
         sequence_id, message_t0 = self.clock_stop(request_id)
 
-        result = {}
-        for output_name in result._result.outputs:
-            result[output_name] = Package(
-                x=result.as_numpy(output_name), t0=message_t0
+
+        np_output = {}
+        for output in result._result.outputs:
+            np_output[output.name] = Package(
+                x=result.as_numpy(output.name), t0=message_t0
             )
-        self.source_map[sequence_id].send(result)
+        self.source_map[sequence_id].send(np_output)
 
 
 def _client_stream(
@@ -130,6 +135,9 @@ def _client_stream(
                 else:
                     x = x[0]
                 inputs.set_data_from_numpy(x)
+                infer_inputs = [inputs]
+            else:
+                infer_inputs = list(states.values())
 
             t0 /= len(packages)
             callback.clock_start(sequence_id, request_id, t0)
@@ -137,7 +145,7 @@ def _client_stream(
             client.async_stream_infer(
                 model_name,
                 model_version=str(model_version),
-                inputs=list(inputs.values()),
+                inputs=infer_inputs,
                 request_id=str(request_id),
                 sequence_start=sequence_start,
                 sequence_id=sequence_id,
@@ -172,22 +180,26 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             raise RuntimeError(f"Couldn't connect to server at {url}")
 
         super().__init__(name)
+        self.model_metadata = client.get_model_metadata(model_name)
         self.model_config = client.get_model_config(model_name).config
         self.url = url
+        self.client = client
 
         states = self.model_config.parameters.get("states", None)
         if states is not None:
+            update_size = self.model_metadata.inputs[0].shape[-1]
+
             _states = OrderedDict()
             for state in states.string_value.split(","):
                 model, input = state.split("/")
                 step_config = client.get_model_config(model).config
 
-                input = [i for i in step_config.input if i == input]
+                input = [i for i in step_config.input if i.name == input]
                 if len(input) == 0:
                     raise ValueError(
                         f"Couldn't find model input for state {state}"
                     )
-                _states[state] = tuple(input.shape)
+                _states[state] = (input[0].dims[1], update_size)
             states = _states
         self.states = states
 
@@ -195,7 +207,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         self._callback = _Callback(self._metric_q)
         self._target_fn = partial(
             _client_stream,
-            client=client,
+            client=self.client,
             model_name=model_name,
             model_version=model_version,
             stop_event=self._stop_event,
@@ -217,8 +229,8 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             )
 
         inputs = {}
-        for input in self.config.input:
-            input = triton.InferInput(input.name, input.dims, input.datatype)
+        for input in self.model_metadata.inputs:
+            input = triton.InferInput(input.name, input.shape, input.datatype)
             if self.states is None:
                 inputs[input.name()] = input
             else:
@@ -233,7 +245,12 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         self._streams.append(stream)
 
         conn = self.add_child(child, conn)
-        self._callback.source_map[sequence_id] = conn
+
+        if not isinstance(child, str):
+            child = child.name
+        self._callback.source_map[sequence_id] = getattr(self._children, child)
+
+        return conn
 
     def stop(self) -> None:
         self._source_stop_event.set()
@@ -304,6 +321,8 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
                 for name, pipe in pipes.items():
                     if pipe.poll():
                         packages = pipe.recv()
+                    else:
+                        continue
 
                     if isinstance(packages, ExceptionWrapper):
                         packages.reraise()
@@ -343,11 +362,15 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
 
             # shut everything down
             for p in [self, server_monitor, client_monitor]:
-                p.stop()
                 if p is None:
                     continue
+
+                p.stop()
+                p.join(0.5)
                 try:
                     p.close()
+                except AttributeError:
+                    continue
                 except ValueError:
                     p.terminate()
                     time.sleep(0.1)

@@ -57,7 +57,7 @@ class ThreadedStatWriter(Thread):
 
         self.quantities = quantities or {}
         self.monitors = monitors or {}
-        for metric in self.montiors:
+        for metric in self.monitors:
             assert metric in self.quantities
 
         self.f = None
@@ -101,6 +101,7 @@ class ThreadedStatWriter(Thread):
             yield
 
     def write_row(self, f, values):
+        values = list(map(str, values))
         if len(values) != len(self.columns):
             raise ValueError(
                 "Can't write values {} with length {}, "
@@ -108,7 +109,7 @@ class ThreadedStatWriter(Thread):
                     ", ".join(values), len(values), len(self.columns)
                 )
             )
-        f.write("\n" + ",".join(map(str, values)))
+        f.write("\n" + ",".join(values))
 
     def run(self):
         with self.open() as f:
@@ -137,7 +138,7 @@ class ThreadedStatWriter(Thread):
 class ServerStatsMonitor(ThreadedStatWriter):
     def __init__(
         self,
-        client: ThreadedMultiStreamInferenceClient,
+        client: "ThreadedMultiStreamInferenceClient",
         output_file: typing.Optional[str] = None,
         monitor: typing.Optional[typing.Dict[str, float]] = None,
     ):
@@ -162,14 +163,17 @@ class ServerStatsMonitor(ThreadedStatWriter):
         ]
 
         quantities = {}
-        for model, process in product(self.models):
+        for model, process in product(self.models, processes):
             quantities[f"{model}_{process}"] = min
 
         columns = processes + ["gpu_utilization", "model", "count", "interval"]
         self._last_time = time.time()
 
         super().__init__(
-            output_file, columns=columns, quantities=quantities, monitors=monitor
+            output_file=output_file,
+            columns=columns,
+            quantities=quantities,
+            monitors=monitor
         )
 
         # initialize metrics
@@ -217,7 +221,7 @@ class ServerStatsMonitor(ThreadedStatWriter):
             count = sum(counts)
 
             model_values = []
-            for process in self.columns[1:-1]:
+            for process in self.columns[:5]:
                 field = process if process != "success" else "request"
                 process_times = list(
                     map(
@@ -260,7 +264,7 @@ class ClientStatsMonitor(ThreadedStatWriter):
         self._latency_q = Queue()
 
         super().__init__(
-            output_file,
+            output_file=output_file,
             columns=[
                 "sequence_id",
                 "message_start",
@@ -281,12 +285,13 @@ class ClientStatsMonitor(ThreadedStatWriter):
             self.start_time = measurements[1]
             return
 
+        measurements = list(measurements)
         sequence_id = measurements.pop(0)
         measurements = [i - self.start_time for i in measurements]
         measurements = [sequence_id] + measurements
 
         self.n += 1
-        latency = measurements[-1] - measurements[0]
+        latency = measurements[-1] - measurements[1]
         self._latency += (latency - self._latency) / self.n
         throughput = self.n / measurements[-1]
 

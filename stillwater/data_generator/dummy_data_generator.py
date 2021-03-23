@@ -23,7 +23,7 @@ class DummyDataGenerator(DataGenerator):
         self._last_time = time.time()
 
     def __next__(self):
-        if self.generation_rate is not None:
+        if self._sleep_time is not None:
             while (time.time() - self._last_time) < self._sleep_time:
                 time.sleep(1e-6)
 
