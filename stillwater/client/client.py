@@ -320,7 +320,6 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
                         "Timed out after no packages arrived "
                         f"for {timeout} seconds"
                     )
-                yield None, None
 
                 # TODO: this should be moved to the script calling
                 # I think, but I don't have a good way of getting
