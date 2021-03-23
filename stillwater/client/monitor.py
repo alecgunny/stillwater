@@ -39,7 +39,7 @@ class MonitoredMetricViolationException(Exception):
 # TODO: can we just do this in the init of the exception?
 # will that screw things up with ExceptionWrapper?
 def _raise_exception(metric, limit, value):
-    return MonitoredMetricViolationException(
+    raise MonitoredMetricViolationException(
         f"Metric {metric} violated limit {limit} with value {value}"
     )
 
@@ -57,13 +57,19 @@ class ThreadedStatWriter(Thread):
 
         self.quantities = quantities or {}
         self.monitors = monitors or {}
-        for metric in self.montiors:
+        for metric in self.monitors:
             assert metric in self.quantities
 
         self.f = None
         self._stop_event = Event()
         self._error_q = Queue()
         super().__init__()
+
+        # TODO: make configurable
+        self._grace_period = 10000
+        self._n = 0
+        self._sustain = 500
+        self._steps_since_violation_started = 0
 
     def monitor(self, values):
         for metric, value in values.items():
@@ -72,8 +78,19 @@ class ThreadedStatWriter(Thread):
             except KeyError:
                 continue
 
-            if self.quantities[metric](limit, value) == value:
+            if (
+                self.quantities[metric](limit, value) == limit and
+                self._n >= self._grace_period and
+                self._steps_since_violation_started >= self._sustain
+            ):
                 _raise_exception(metric, limit, value)
+            elif (
+                self.quantities[metric](limit, value) == limit and
+                self._n >= self._grace_period
+            ):
+                self._steps_since_violation_started += 1
+            elif self.quantities[metric](limit, value) == value:
+                self._steps_since_violation_started = 0
 
     @property
     def stopped(self) -> bool:
@@ -101,6 +118,7 @@ class ThreadedStatWriter(Thread):
             yield
 
     def write_row(self, f, values):
+        values = list(map(str, values))
         if len(values) != len(self.columns):
             raise ValueError(
                 "Can't write values {} with length {}, "
@@ -108,7 +126,7 @@ class ThreadedStatWriter(Thread):
                     ", ".join(values), len(values), len(self.columns)
                 )
             )
-        f.write("\n" + ",".join(map(str, values)))
+        f.write("\n" + ",".join(values))
 
     def run(self):
         with self.open() as f:
@@ -119,7 +137,10 @@ class ThreadedStatWriter(Thread):
                 try:
                     values = self._get_values()
                     if f is None or values is None:
+                        if values is not None:
+                            self._n += 1
                         continue
+                    self._n += 1
 
                     if not isinstance(values[0], list):
                         values = [values]
@@ -137,7 +158,7 @@ class ThreadedStatWriter(Thread):
 class ServerStatsMonitor(ThreadedStatWriter):
     def __init__(
         self,
-        client: ThreadedMultiStreamInferenceClient,
+        client: "ThreadedMultiStreamInferenceClient",
         output_file: typing.Optional[str] = None,
         monitor: typing.Optional[typing.Dict[str, float]] = None,
     ):
@@ -162,14 +183,17 @@ class ServerStatsMonitor(ThreadedStatWriter):
         ]
 
         quantities = {}
-        for model, process in product(self.models):
+        for model, process in product(self.models, processes):
             quantities[f"{model}_{process}"] = min
 
         columns = processes + ["gpu_utilization", "model", "count", "interval"]
         self._last_time = time.time()
 
         super().__init__(
-            output_file, columns=columns, quantities=quantities, monitors=monitor
+            output_file=output_file,
+            columns=columns,
+            quantities=quantities,
+            monitors=monitor
         )
 
         # initialize metrics
@@ -193,8 +217,8 @@ class ServerStatsMonitor(ThreadedStatWriter):
     def _get_values(self):
         response = requests.get(self.url)
         new_time = time.time()
-        interval = self._last_time - new_time
-        self._last_time = time.time()
+        interval = new_time - self._last_time
+        self._last_time = new_time
 
         content = response.content.decode("utf-8").split("\n")
         util_rows = self._filter_rows_by_start(content, "nv_gpu_utilization")
@@ -217,7 +241,7 @@ class ServerStatsMonitor(ThreadedStatWriter):
             count = sum(counts)
 
             model_values = []
-            for process in self.columns[1:-1]:
+            for process in self.columns[:5]:
                 field = process if process != "success" else "request"
                 process_times = list(
                     map(
@@ -260,7 +284,7 @@ class ClientStatsMonitor(ThreadedStatWriter):
         self._latency_q = Queue()
 
         super().__init__(
-            output_file,
+            output_file=output_file,
             columns=[
                 "sequence_id",
                 "message_start",
@@ -281,12 +305,13 @@ class ClientStatsMonitor(ThreadedStatWriter):
             self.start_time = measurements[1]
             return
 
+        measurements = list(measurements)
         sequence_id = measurements.pop(0)
         measurements = [i - self.start_time for i in measurements]
         measurements = [sequence_id] + measurements
 
         self.n += 1
-        latency = measurements[-1] - measurements[0]
+        latency = measurements[-1] - measurements[1]
         self._latency += (latency - self._latency) / self.n
         throughput = self.n / measurements[-1]
 

@@ -1,4 +1,4 @@
-from .data_generator import DataGenerator
+from .data_generator import DataGenerator, MultiSourceGenerator
 from .dummy_data_generator import DummyDataGenerator
 
 # gwpy should not be a hard dependency of this
