@@ -17,7 +17,7 @@ class DummyDataGenerator(DataGenerator):
         super().__init__(name=name)
         self.shape = shape
         if generation_rate is not None:
-            self._sleep_time = 1 / generation_rate - 1e-4
+            self._sleep_time = 1 / generation_rate - 4e-4
         else:
             self._sleep_time = None
         self._last_time = time.time()
