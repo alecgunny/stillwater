@@ -5,7 +5,7 @@ from collections import defaultdict
 from contextlib import contextmanager
 from itertools import product
 from queue import Empty, Queue
-from threading import Event, Thread
+from multiprocessing import Event, Process
 
 import requests
 from tritonclient import grpc as triton
@@ -44,7 +44,7 @@ def _raise_exception(metric, limit, value):
     )
 
 
-class ThreadedStatWriter(Thread):
+class ThreadedStatWriter(Process):
     def __init__(
         self,
         columns: typing.List[str],
