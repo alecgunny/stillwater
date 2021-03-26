@@ -4,8 +4,8 @@ import typing
 from collections import defaultdict
 from contextlib import contextmanager
 from itertools import product
-from queue import Empty, Queue
-from multiprocessing import Event, Process
+from queue import Empty
+from multiprocessing import Event, Process, Queue
 
 import requests
 from tritonclient import grpc as triton
