@@ -3,7 +3,6 @@ import time
 import typing
 import zlib
 from collections import OrderedDict
-from contextlib import contextmanager
 from functools import partial
 from threading import Event, Thread
 
@@ -58,7 +57,6 @@ class _Callback:
         request_id = int(result.get_response().id)
         sequence_id, message_t0 = self.clock_stop(request_id)
 
-
         np_output = {}
         for output in result._result.outputs:
             np_output[output.name] = Package(
@@ -77,6 +75,7 @@ def _client_stream(
     stop_event,
     callback,
     states,
+    sleep_time,
 ):
     try:
         sequence_start = True
@@ -90,6 +89,7 @@ def _client_stream(
         else:
             states = inputs
 
+        last_inference_time = time.time()
         while not stop_event.is_set():
             request_id = random.randint(0, 1e9)
 
@@ -142,6 +142,14 @@ def _client_stream(
             t0 /= len(packages)
             callback.clock_start(sequence_id, request_id, t0)
 
+            # optionally wait if we have a qps limit
+            if sleep_time is not None:
+                while (time.time() - last_inference_time) < sleep_time:
+                    time.sleep(1e-6)
+
+            # TODO: we should do some check on whether we
+            # have states or not here and use async_infer
+            # instead if we're doing a "normal" inference
             client.async_stream_infer(
                 model_name,
                 model_version=str(model_version),
@@ -151,10 +159,15 @@ def _client_stream(
                 sequence_id=sequence_id,
                 timeout=60,
             )
+
+            last_inference_time = time.time()
             sequence_start = False
 
     except Exception as e:
-        data_source.stop()
+        try:
+            data_source.stop()
+        except AttributeError:
+            pass
         callback(None, e)
 
 
@@ -164,6 +177,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         url: str,
         model_name: str,
         model_version: int,
+        qps_limit: typing.Optional[float] = None,
         name: typing.Optional[str] = None,
     ) -> None:
         # do a few checks on the server to make sure we'll be good to go
@@ -180,28 +194,52 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             raise RuntimeError(f"Couldn't connect to server at {url}")
 
         super().__init__(name)
+
+        # expose as attributes some information that other
+        # threads like data generators might find useful
         self.model_metadata = client.get_model_metadata(model_name)
         self.model_config = client.get_model_config(model_name).config
         self.url = url
         self.client = client
 
+        # see if our model has exposed any streaming
+        # snapshot states that need to be updated
+        # instead of regular static inputs
         states = self.model_config.parameters.get("states", None)
         if states is not None:
+            # the last dimension of the model input dictates
+            # the size of the state update
+            # TODO: support 2D streaming updates for e.g. images
             update_size = self.model_metadata.inputs[0].shape[-1]
 
+            # state order is formated like:
+            # <model_name_1>/<input_name_1>,
+            # <model_name_2>/<input_name_2>,... etc.
             _states = OrderedDict()
             for state in states.string_value.split(","):
                 model, input = state.split("/")
-                step_config = client.get_model_config(model).config
 
+                # get the config for this model and find
+                # the specified input
+                step_config = client.get_model_config(model).config
                 input = [i for i in step_config.input if i.name == input]
                 if len(input) == 0:
                     raise ValueError(
                         f"Couldn't find model input for state {state}"
                     )
+
+                # shape of this input will then be the
+                # number of channels in this input plus
+                # the update size
                 _states[state] = (input[0].dims[1], update_size)
             states = _states
         self.states = states
+
+        if qps_limit is not None:
+            _eps = 2e-5  # TODO: should this be configurable?
+            sleep_time = 1.0 / qps_limit - _eps
+        else:
+            sleep_time = None
 
         self._source_stop_event = Event()
         self._callback = _Callback(self._metric_q)
@@ -213,6 +251,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             stop_event=self._stop_event,
             callback=self._callback,
             states=states,
+            sleep_time=sleep_time,
         )
         self._streams = []
 
@@ -222,7 +261,47 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         child: typing.Union[str, "Process"],
         sequence_id: typing.Optional[int] = None,
         conn: typing.Optional["Connection"] = None,
-    ):
+    ) -> "Connection":
+        """
+        Add a data source from which to make inference requests
+
+        Each new data source will spawn a new worker thread
+        with a unique sequence id from which to make requests
+        through the same gRPC channel to the server. The source
+        should be an iterator-like object (i.e. implementing
+        `__iter__` and `__next__` methods), and each call to
+        `__next__` should produce a dictionary containing entries
+        for each input to the model (in the case that there are
+        streaming states, this means an entry for each state
+        that needs to be updated).
+
+        Additionally, each data source should be associated with
+        a child process to which its inference outputs will be
+        sent when the request returns. If the child is a string,
+        it will be implied that the target process is the main
+        process. A pipe to the child process can be passed
+        explicitly, in which case the return will be None, otherwise
+        a connection will be created and its other end will be
+        returned.
+
+        Parameters
+        ----------
+        :param source: Data generating iterator
+        :param child: Child process to which to send infer outputs.
+            If a string, target process will be the main process.
+        :param sequence_id: Unique ID to associate with the data
+            generator's inference stream. If left as `None`, one
+            will be (deterministically) randomly generated using
+            the source's name as a hash key.
+        :param conn: `Connection` object in which to send inference
+            outputs. If left as `None`, a connection pair will
+            be created.
+
+        Returns
+        -------
+            A `Connection` object representing the other end of
+            the created pipe if `conn=None`, otherwise `None`.
+        """
         if self.is_alive() or self.exitcode is not None:
             raise ValueError(
                 "Cannot add data source to already started client process"
@@ -237,6 +316,9 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
                 inputs = input
 
         if sequence_id is None:
+            # TODO: check if self.states is None too, since
+            # I don't think we should need sequence ids if
+            # we're not doing streaming inference
             sequence_id = zlib.adler32(source.name.encode("utf-8"))
 
         stream = Thread(
@@ -248,6 +330,9 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
 
         if not isinstance(child, str):
             child = child.name
+
+        if sequence_id in self._callback.source_map:
+            raise ValueError(f"Sequence ID {sequence_id} already in use")
         self._callback.source_map[sequence_id] = getattr(self._children, child)
 
         return conn
@@ -256,7 +341,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         self._source_stop_event.set()
         super().stop()
 
-    def _main_loop(self):
+    def _main_loop(self) -> None:
         self._metric_q.put(("start_time", gps_time()))
 
         with self.client as client:
