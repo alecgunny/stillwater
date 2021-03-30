@@ -4,11 +4,10 @@ import typing
 from collections import defaultdict
 from contextlib import contextmanager
 from itertools import product
-from queue import Empty
 from multiprocessing import Event, Process, Queue
+from queue import Empty
 
 import requests
-from tritonclient import grpc as triton
 
 from stillwater.utils import ExceptionWrapper
 
@@ -79,14 +78,14 @@ class ThreadedStatWriter(Process):
                 continue
 
             if (
-                self.quantities[metric](limit, value) == limit and
-                self._n >= self._grace_period and
-                self._steps_since_violation_started >= self._sustain
+                self.quantities[metric](limit, value) == limit
+                and self._n >= self._grace_period
+                and self._steps_since_violation_started >= self._sustain
             ):
                 _raise_exception(metric, limit, value)
             elif (
-                self.quantities[metric](limit, value) == limit and
-                self._n >= self._grace_period
+                self.quantities[metric](limit, value) == limit
+                and self._n >= self._grace_period
             ):
                 self._steps_since_violation_started += 1
             elif self.quantities[metric](limit, value) == value:
@@ -172,8 +171,6 @@ class ServerStatsMonitor(ThreadedStatWriter):
 
         # TODO: make this more general
         self.url = "http://" + client.url.replace("8001", "8002/metrics")
-        self.stats = defaultdict(lambda: defaultdict(ServerInferenceMetric))
-
         processes = [
             "success",
             "queue",
@@ -193,11 +190,8 @@ class ServerStatsMonitor(ThreadedStatWriter):
             output_file=output_file,
             columns=columns,
             quantities=quantities,
-            monitors=monitor
+            monitors=monitor,
         )
-
-        # initialize metrics
-        _ = self._get_values()
 
     def _get_gpu_id(self, row):
         id = re.search('(?<=gpu_uuid=").+(?="})', row)
@@ -213,6 +207,11 @@ class ServerStatsMonitor(ThreadedStatWriter):
 
     def _filter_rows_by_content(self, rows, content):
         return [i for i in rows if content in i]
+
+    def run(self):
+        self.stats = defaultdict(lambda: defaultdict(ServerInferenceMetric))
+        _ = self._get_values()
+        super().run()
 
     def _get_values(self):
         response = requests.get(self.url)
