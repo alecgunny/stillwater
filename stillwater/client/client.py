@@ -236,7 +236,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         self.states = states
 
         if qps_limit is not None:
-            _eps = 2e-5  # TODO: should this be configurable?
+            _eps = 1e-4  # TODO: should this be configurable?
             sleep_time = 1.0 / qps_limit - _eps
         else:
             sleep_time = None
