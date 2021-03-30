@@ -90,14 +90,10 @@ def _client_stream(
             states = inputs
 
         last_inference_time = time.time()
+        next_packages = next(data_source)
         while not stop_event.is_set():
             request_id = random.randint(0, 1e9)
-
-            try:
-                packages = next(data_source)
-            except StopIteration as e:
-                callback(None, e)
-                break
+            packages = next_packages
 
             if not isinstance(packages, dict):
                 packages = {name: x for name, x in zip(states, [packages])}
@@ -140,6 +136,13 @@ def _client_stream(
                 infer_inputs = list(states.values())
 
             t0 /= len(packages)
+
+            try:
+                next_packages = next(data_source)
+            except StopIteration as e:
+                callback(None, e)
+                break
+
             callback.clock_start(sequence_id, request_id, t0)
 
             # optionally wait if we have a qps limit
@@ -345,7 +348,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         self._metric_q.put(("start_time", gps_time()))
 
         with self.client as client:
-            client.start_stream(callback=self._callback, stream_timeout=60)
+            client.start_stream(callback=self._callback)
             for stream in self._streams:
                 stream.start()
 
