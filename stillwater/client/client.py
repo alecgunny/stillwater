@@ -22,7 +22,7 @@ if typing.TYPE_CHECKING:
 
 class DummyThread:
     def __init__(self, target, args):
-        self.fn = partial(target, args)
+        self.fn = partial(target, *args)
 
     def start(self):
         pass
