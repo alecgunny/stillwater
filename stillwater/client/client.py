@@ -20,6 +20,17 @@ if typing.TYPE_CHECKING:
     from stillwater.data_generator import DataGenerator
 
 
+class DummyThread:
+    def __init__(self, fn, args):
+        self.fn = partial(fn, args)
+
+    def start(self):
+        pass
+
+    def join(self):
+        self.fn()
+
+
 class _Callback:
     def __init__(self, metric_q):
         self._metric_q = metric_q
@@ -324,7 +335,7 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             # we're not doing streaming inference
             sequence_id = zlib.adler32(source.name.encode("utf-8"))
 
-        stream = Thread(
+        stream = DummyThread(
             target=self._target_fn, args=(source, inputs, sequence_id)
         )
         self._streams.append(stream)
