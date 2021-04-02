@@ -1,3 +1,4 @@
+import logging
 import random
 import time
 import typing
@@ -174,7 +175,7 @@ def _client_stream(
                 sequence_id=sequence_id,
                 timeout=60,
             )
-            print(time.time() - start_time)
+            logging.info(time.time() - start_time)
 
             last_inference_time = time.time()
             sequence_start = False
