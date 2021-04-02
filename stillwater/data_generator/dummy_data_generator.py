@@ -15,7 +15,7 @@ class Stopped(Exception):
 
 def generate(q, stop_event, shape, generation_rate):
     if generation_rate is not None:
-        _sleep_time = 1 / generation_rate - 4e-4
+        _sleep_time = 1 / generation_rate - 1e-4
     else:
         _sleep_time = None
 
@@ -26,15 +26,14 @@ def generate(q, stop_event, shape, generation_rate):
                 while (time.time() - last_time) < _sleep_time:
                     time.sleep(1e-6)
 
-            x = np.random.randn(*shape).astype("float32")
-            package = Package(x=x, t0=gps_time())
-            last_time = package.t0
-
             while q.full():
                 if stop_event.is_set():
                     raise Stopped
                 time.sleep(1e-6)
-            q.put(x)
+            x = np.random.randn(*shape).astype("float32")
+            package = Package(x=x, t0=gps_time())
+            last_time = package.t0
+            q.put(package)
 
     except Stopped:
         pass
