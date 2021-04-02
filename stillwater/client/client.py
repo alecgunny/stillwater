@@ -165,7 +165,6 @@ def _client_stream(
             # TODO: we should do some check on whether we
             # have states or not here and use async_infer
             # instead if we're doing a "normal" inference
-            start_time = time.time()
             client.async_stream_infer(
                 model_name,
                 model_version=str(model_version),
@@ -175,7 +174,6 @@ def _client_stream(
                 sequence_id=sequence_id,
                 timeout=60,
             )
-            logging.info(time.time() - start_time)
 
             last_inference_time = time.time()
             sequence_start = False
