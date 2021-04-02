@@ -17,7 +17,7 @@ class DataGenerator:
 
 class MultiSourceGenerator(DataGenerator):
     def __init__(self, data_generators, name=None):
-        self._data_generators = [iter(d) for d in data_generators]
+        self._data_generators = data_generators
         super().__init__(name)
 
     def __next__(self):
@@ -25,3 +25,12 @@ class MultiSourceGenerator(DataGenerator):
         for gen in self._data_generators:
             packages[gen.name] = next(gen)
         return packages
+
+    def __iter__(self):
+        self._data_generators = [iter(d) for d in self._data_generators]
+        return self
+
+    def stop(self):
+        for gen in self._data_generators:
+            gen.stop()
+

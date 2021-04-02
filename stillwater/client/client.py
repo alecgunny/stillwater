@@ -90,7 +90,7 @@ def _client_stream(
 ):
     try:
         sequence_start = True
-        data_source = iter(data_source)
+        data_iter = iter(data_source)
 
         # if we passed a value to states, we should only
         # have one input: the streaming input tensor.
@@ -101,7 +101,7 @@ def _client_stream(
             states = inputs
 
         last_inference_time = time.time()
-        next_packages = next(data_source)
+        next_packages = next(data_iter)
         while not stop_event.is_set():
             request_id = random.randint(0, 1e9)
             packages = next_packages
@@ -149,7 +149,7 @@ def _client_stream(
             t0 /= len(packages)
 
             try:
-                next_packages = next(data_source)
+                next_packages = next(data_iter)
             except StopIteration as e:
                 callback(None, e)
                 break
@@ -176,13 +176,13 @@ def _client_stream(
 
             last_inference_time = time.time()
             sequence_start = False
-
     except Exception as e:
+        callback(None, e)
+    finally:
         try:
             data_source.stop()
         except AttributeError:
             pass
-        callback(None, e)
 
 
 class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):

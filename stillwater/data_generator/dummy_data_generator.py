@@ -51,12 +51,14 @@ class DummyDataGenerator(DataGenerator):
         super().__init__(name=name)
         self._q = Queue(maxsize=100)
         self._stop_event = Event()
-        self._p = Process(
-            target=generate,
-            args=(self._q, self._stop_event, shape, generation_rate),
-        )
+        self.shape = shape
+        self.generation_rate = generation_rate
 
     def __iter__(self):
+        self._p = Process(
+            target=generate,
+            args=(self._q, self._stop_event, self.shape, self.generation_rate)
+        )
         self._p.start()
         return self
 
@@ -77,3 +79,4 @@ class DummyDataGenerator(DataGenerator):
             self._p.close()
         except ValueError:
             self._p.terminate()
+
