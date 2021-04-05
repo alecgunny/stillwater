@@ -29,4 +29,4 @@ class DummyDataGenerator(DataGenerator):
         x = np.random.randn(*self.shape).astype("float32")
         package = Package(x=x, t0=gps_time())
         self._last_time = package.t0
-        return x
+        return package
