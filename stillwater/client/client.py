@@ -1,4 +1,3 @@
-import logging
 import random
 import time
 import typing
@@ -155,12 +154,11 @@ def _client_stream(
                 callback(None, e)
                 break
 
-            callback.clock_start(sequence_id, request_id, t0)
-
             # optionally wait if we have a qps limit
             if sleep_time is not None:
                 while (time.time() - last_inference_time) < sleep_time:
                     time.sleep(1e-6)
+            callback.clock_start(sequence_id, request_id, t0)
 
             # TODO: we should do some check on whether we
             # have states or not here and use async_infer
