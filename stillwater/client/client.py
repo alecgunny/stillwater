@@ -154,6 +154,8 @@ def _client_stream(
                 except StopIteration as e:
                     callback(None, e)
                     break
+            else:
+                t0 = time.time()
 
             # optionally wait if we have a qps limit
             if sleep_time is not None:
