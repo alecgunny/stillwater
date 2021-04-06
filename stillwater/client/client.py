@@ -104,58 +104,55 @@ def _client_stream(
         next_packages = next(data_iter)
         while not stop_event.is_set():
             request_id = random.randint(0, 1e9)
-            if sequence_start:
-                packages = next_packages
+            packages = next_packages
 
-                if not isinstance(packages, dict):
-                    packages = {name: x for name, x in zip(states, [packages])}
-                assert len(packages) == len(states)
+            if not isinstance(packages, dict):
+                packages = {name: x for name, x in zip(states, [packages])}
+            assert len(packages) == len(states)
 
-                x, t0 = [], 0
+            x, t0 = [], 0
 
-                # if we're using streams, the order matters since
-                # we need to concatenate them. Otherwise we'll just
-                # grab the appropriate input and set its value
-                for name, input in states.items():
-                    package = packages[name]
+            # if we're using streams, the order matters since
+            # we need to concatenate them. Otherwise we'll just
+            # grab the appropriate input and set its value
+            for name, input in states.items():
+                package = packages[name]
 
-                    if isinstance(input, triton.InferInput):
-                        # states weren't provided, so update the
-                        # appropriate input
-                        input.set_data_from_numpy(package.x)
-                    else:
-                        # we have streaming states, deal with these
-                        # later. Add a dummy batch dimension
-                        x.append(package.x[None])
-
-                    # use the average of package creation times as
-                    # the value for latency measurement. Shouldn't
-                    # make a difference for most practical use cases
-                    # since these should be the same (in fact it's
-                    # probably worth checking to ensure that)
-                    t0 += package.t0
-
-                # concatenate streaming states if we have them and
-                # set the stream input
-                if len(x) > 0:
-                    if len(x) > 1:
-                        x = np.concatenate(x, axis=1)
-                    else:
-                        x = x[0]
-                    inputs.set_data_from_numpy(x)
-                    infer_inputs = [inputs]
+                if isinstance(input, triton.InferInput):
+                    # states weren't provided, so update the
+                    # appropriate input
+                    input.set_data_from_numpy(package.x)
                 else:
-                    infer_inputs = list(states.values())
+                    # we have streaming states, deal with these
+                    # later. Add a dummy batch dimension
+                    x.append(package.x[None])
 
-                t0 /= len(packages)
+                # use the average of package creation times as
+                # the value for latency measurement. Shouldn't
+                # make a difference for most practical use cases
+                # since these should be the same (in fact it's
+                # probably worth checking to ensure that)
+                t0 += package.t0
 
-                try:
-                    next_packages = next(data_iter)
-                except StopIteration as e:
-                    callback(None, e)
-                    break
+            # concatenate streaming states if we have them and
+            # set the stream input
+            if len(x) > 0:
+                if len(x) > 1:
+                    x = np.concatenate(x, axis=1)
+                else:
+                    x = x[0]
+                inputs.set_data_from_numpy(x)
+                infer_inputs = [inputs]
             else:
-                t0 = time.time()
+                infer_inputs = list(states.values())
+
+            t0 /= len(packages)
+
+            try:
+                next_packages = next(data_iter)
+            except StopIteration as e:
+                callback(None, e)
+                break
 
             # optionally wait if we have a qps limit
             if sleep_time is not None:
