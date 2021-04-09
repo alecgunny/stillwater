@@ -1,10 +1,11 @@
+import logging
 import random
 import time
 import typing
 import zlib
 from collections import OrderedDict
 from functools import partial
-from threading import Event  # , Thread
+from threading import Event, Lock  # , Thread
 
 import numpy as np
 import tritonclient.grpc as triton
@@ -241,15 +242,14 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
                         f"Couldn't find model input for state {state}"
                     )
 
-                # shape of this input will then be the
-                # number of channels in this input plus
-                # the update size
+                # shape of this input will then be the number of
+                # channels in this input plus the update size
                 _states[state] = (input[0].dims[1], update_size)
             states = _states
         self.states = states
 
         if qps_limit is not None:
-            _eps = 1e-4  # TODO: should this be configurable?
+            _eps = 5e-5  # TODO: should this be configurable?
             sleep_time = 1.0 / qps_limit - _eps
         else:
             sleep_time = None
@@ -367,6 +367,14 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             for stream in self._streams:
                 stream.join()
 
+            # clear the request queue so that we don't have
+            # have to sit around and wait for all the
+            # responses to return, then put in the kill
+            # message manually
+            client._stream._request_queue.queue.clear()
+            client._stream._request_queue.put(None)
+        logging.info("Client closed")
+
     def monitor(
         self,
         pipes: typing.Optional[typing.Dict[str, "Connection"]] = None,
@@ -463,12 +471,13 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
                     continue
 
                 p.stop()
-                p.join(0.5)
+                p.join(1)
                 try:
                     p.close()
                 except AttributeError:
                     continue
                 except ValueError:
+                    print(f"process {p.name} exiting ungracefully")
                     p.terminate()
                     time.sleep(0.1)
                     p.close()
