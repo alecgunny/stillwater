@@ -62,6 +62,7 @@ class ThreadedStatWriter(Process):
         self.f = None
         self._stop_event = Event()
         self._error_q = Queue()
+        self._write_q = Queue()
         super().__init__()
 
         # TODO: make configurable
@@ -98,6 +99,16 @@ class ThreadedStatWriter(Process):
     def stop(self) -> None:
         self._stop_event.set()
 
+    def close(self) -> None:
+        if not isinstance(self.output_file, str):
+            while True:
+                try:
+                    row = self._write_q.get_nowait()
+                except Empty:
+                    break
+                self.output_file.write(row)
+        super().close()
+
     @property
     def error(self) -> Exception:
         try:
@@ -108,15 +119,20 @@ class ThreadedStatWriter(Process):
     @contextmanager
     def open(self):
         if self.output_file is not None:
-            f = open(self.output_file, "w")
+            if isinstance(self.output_file, str):
+                f = open(self.output_file, "w")
+            else:
+                f = self.output_file
+
             try:
                 yield f
             finally:
-                f.close()
+                if isinstance(self.output_file, str):
+                    f.close()
         else:
             yield
 
-    def write_row(self, f, values):
+    def write_row(self, f, values, start=False):
         values = list(map(str, values))
         if len(values) != len(self.columns):
             raise ValueError(
@@ -125,12 +141,19 @@ class ThreadedStatWriter(Process):
                     ", ".join(values), len(values), len(self.columns)
                 )
             )
-        f.write("\n" + ",".join(values))
+        row = ",".join(values)
+        if not start:
+            row = "\n" + row
+
+        if isinstance(self.output_file, str):
+            f.write(row)
+        else:
+            self._write_q.put(row)
 
     def run(self):
         with self.open() as f:
             if f is not None:
-                f.write(",".join(self.columns))
+                self.write_row(f, self.columns, start=True)
 
             while not self.stopped:
                 try:
