@@ -41,10 +41,15 @@ class _Callback:
         self.request_start_times = {}
         self.sequence_id_map = {}
 
-    def clock_start(self, sequence_id, request_id, t0):
-        self.sequence_id_map[request_id] = sequence_id
-        self.message_start_times[request_id] = t0
-        self.request_start_times[request_id] = gps_time()
+    def clock_start(self, sequence_id, t0):
+        while True:
+            request_id = random.randint(0, 1e9)
+            if request_id not in self.sequence_id_map:
+                self.sequence_id_map[request_id] = sequence_id
+                self.message_start_times[request_id] = t0
+                self.request_start_times[request_id] = gps_time()
+                break
+        return request_id
 
     def clock_stop(self, request_id):
         message_t0 = self.message_start_times.pop(request_id)
@@ -104,7 +109,6 @@ def _client_stream(
         last_inference_time = time.time()
         next_packages = next(data_iter)
         while not stop_event.is_set():
-            request_id = random.randint(0, 1e9)
             packages = next_packages
 
             if not isinstance(packages, dict):
@@ -159,7 +163,7 @@ def _client_stream(
             if sleep_time is not None:
                 while (time.time() - last_inference_time) < sleep_time:
                     time.sleep(1e-6)
-            callback.clock_start(sequence_id, request_id, t0)
+            request_id = callback.clock_start(sequence_id, t0)
 
             # TODO: we should do some check on whether we
             # have states or not here and use async_infer
