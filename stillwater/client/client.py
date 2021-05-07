@@ -5,7 +5,6 @@ import typing
 import zlib
 from collections import OrderedDict
 from functools import partial
-from threading import Event, Lock  # , Thread
 
 import numpy as np
 import tritonclient.grpc as triton
@@ -41,10 +40,20 @@ class _Callback:
         self.request_start_times = {}
         self.sequence_id_map = {}
 
-    def clock_start(self, sequence_id, request_id, t0):
-        self.sequence_id_map[request_id] = sequence_id
-        self.message_start_times[request_id] = t0
-        self.request_start_times[request_id] = gps_time()
+    def clock_start(self, sequence_id, t0):
+        """
+        create a locally unique request id and
+        record the time at which the corresponding
+        request got put in Triton's request queue
+        """
+        while True:
+            request_id = random.randint(0, 1e9)
+            if request_id not in self.sequence_id_map:
+                self.sequence_id_map[request_id] = sequence_id
+                self.message_start_times[request_id] = t0
+                self.request_start_times[request_id] = gps_time()
+                break
+        return request_id
 
     def clock_stop(self, request_id):
         message_t0 = self.message_start_times.pop(request_id)
@@ -89,77 +98,91 @@ def _client_stream(
     states,
     sleep_time,
 ):
+    # if we passed a value to states, we should only
+    # have one input: the streaming input tensor.
+    # Otherwise, just set it equal to the inputs
+    if states is not None:
+        if not isinstance(inputs, triton.InferInput):
+            raise ValueError(
+                "Can only provide one input if using stateful "
+                "updates, found {}".format(len(inputs))
+            )
+    else:
+        states = inputs
+
+    def _prepare_inputs(packages):
+        if isinstance(packages, Package):
+            packages = {name: x for name, x in zip(states, [packages])}
+        elif not isinstance(packages, dict):
+            raise ValueError(
+                "Expecting packages to be a dict, found type {}".format(
+                    type(packages)
+                )
+            )
+
+        if len(packages) != len(states):
+            raise ValueError(
+                "Expected {} packages, found dict with {}".format(
+                    len(states), len(packages)
+                )
+            )
+
+        x, t0 = [], 0
+        for name, input in states.items():
+            package = packages[name]
+
+            if isinstance(input, triton.InferInput):
+                # states weren't provided, so update the
+                # appropriate input
+                input.set_data_from_numpy(package.x)
+            else:
+                # we have streaming states, deal with these
+                # later. Add a dummy batch dimension
+                x.append(package.x[None])
+
+            # use the average of package creation times as
+            # the value for latency measurement. Shouldn't
+            # make a difference for most practical use cases
+            # since these should be the same (in fact it's
+            # probably worth checking to ensure that)
+            t0 += package.t0
+
+        # concatenate streaming states if we have them and
+        # set the stream input
+        if len(x) > 0:
+            if len(x) > 1:
+                x = np.concatenate(x, axis=1)
+            else:
+                x = x[0]
+            inputs.set_data_from_numpy(x)
+            infer_inputs = [inputs]
+        else:
+            infer_inputs = list(states.values())
+
+        t0 /= len(packages)
+        return infer_inputs, t0
+
     try:
         sequence_start = True
         data_iter = iter(data_source)
 
-        # if we passed a value to states, we should only
-        # have one input: the streaming input tensor.
-        # Otherwise, just set it equal to the inputs
-        if states is not None:
-            assert isinstance(inputs, triton.InferInput)
-        else:
-            states = inputs
-
         last_inference_time = time.time()
-        next_packages = next(data_iter)
+        packages = next(data_iter)
         while not stop_event.is_set():
-            request_id = random.randint(0, 1e9)
-            packages = next_packages
+            infer_inputs, t0 = _prepare_inputs(packages)
 
-            if not isinstance(packages, dict):
-                packages = {name: x for name, x in zip(states, [packages])}
-            assert len(packages) == len(states)
-
-            x, t0 = [], 0
-
-            # if we're using streams, the order matters since
-            # we need to concatenate them. Otherwise we'll just
-            # grab the appropriate input and set its value
-            for name, input in states.items():
-                package = packages[name]
-
-                if isinstance(input, triton.InferInput):
-                    # states weren't provided, so update the
-                    # appropriate input
-                    input.set_data_from_numpy(package.x)
-                else:
-                    # we have streaming states, deal with these
-                    # later. Add a dummy batch dimension
-                    x.append(package.x[None])
-
-                # use the average of package creation times as
-                # the value for latency measurement. Shouldn't
-                # make a difference for most practical use cases
-                # since these should be the same (in fact it's
-                # probably worth checking to ensure that)
-                t0 += package.t0
-
-            # concatenate streaming states if we have them and
-            # set the stream input
-            if len(x) > 0:
-                if len(x) > 1:
-                    x = np.concatenate(x, axis=1)
-                else:
-                    x = x[0]
-                inputs.set_data_from_numpy(x)
-                infer_inputs = [inputs]
-            else:
-                infer_inputs = list(states.values())
-
-            t0 /= len(packages)
-
-            try:
-                next_packages = next(data_iter)
-            except StopIteration as e:
-                callback(None, e)
-                break
+            # try to get the next package here so that
+            # if the data iterator raises a StopIteration,
+            # we'll be able to send one more request with
+            # the last piece of data and sequence_end=True
+            # in the `finally` clause
+            packages = next(data_iter)
 
             # optionally wait if we have a qps limit
             if sleep_time is not None:
                 while (time.time() - last_inference_time) < sleep_time:
                     time.sleep(1e-6)
-            callback.clock_start(sequence_id, request_id, t0)
+            request_id = callback.clock_start(sequence_id, t0)
 
             # TODO: we should do some check on whether we
             # have states or not here and use async_infer
@@ -179,13 +202,18 @@ def _client_stream(
     except Exception as e:
         callback(None, e)
     finally:
-        try:
-            data_source.stop()
-        except AttributeError:
-            pass
+        client.async_stream_infer(
+            model_name,
+            model_version=str(model_version),
+            inputs=infer_inputs,
+            request_id=str(request_id),
+            sequence_start=sequence_start,
+            sequence_end=True,
+            timeout=60,
+        )
 
 
-class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
+class StreamingInferenceClient(StreamingInferenceProcess):
     def __init__(
         self,
         url: str,
@@ -254,7 +282,6 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
         else:
             sleep_time = None
 
-        self._source_stop_event = Event()
         self._callback = _Callback(self._metric_q)
         self._target_fn = partial(
             _client_stream,
@@ -350,10 +377,6 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
 
         return conn
 
-    def stop(self) -> None:
-        self._source_stop_event.set()
-        super().stop()
-
     def _main_loop(self) -> None:
         self._metric_q.put(("start_time", gps_time()))
 
@@ -374,6 +397,10 @@ class ThreadedMultiStreamInferenceClient(StreamingInferenceProcess):
             client._stream._request_queue.queue.clear()
             client._stream._request_queue.put(None)
         logging.info("Client closed")
+
+    def __enter__(self):
+        self.start()
+        return self
 
     def monitor(
         self,

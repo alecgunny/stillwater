@@ -1,1 +1,1 @@
-from .client import ThreadedMultiStreamInferenceClient
+from .client import StreamingInferenceClient

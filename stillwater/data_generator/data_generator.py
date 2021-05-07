@@ -1,6 +1,3 @@
-import typing
-
-
 class DataGenerator:
     def __init__(self, name=None):
         self.name = name
@@ -33,4 +30,3 @@ class MultiSourceGenerator(DataGenerator):
     def stop(self):
         for gen in self._data_generators:
             gen.stop()
-
