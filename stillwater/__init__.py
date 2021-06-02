@@ -1,5 +1,5 @@
 from .streaming_inference_process import StreamingInferenceProcess  # isort: skip
 
-from .client import ThreadedMultiStreamInferenceClient
+from .client import StreamingInferenceClient
 from .data_generator import *
-from .utils import ExceptionWrapper, sync_recv
+from .utils import ExceptionWrapper, Package, sync_recv
