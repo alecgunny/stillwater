@@ -102,12 +102,14 @@ def _client_stream(
     # have one input: the streaming input tensor.
     # Otherwise, just set it equal to the inputs
     if states is not None:
+        is_streaming = True
         if not isinstance(inputs, triton.InferInput):
             raise ValueError(
                 "Can only provide one input if using stateful "
                 "updates, found {}".format(len(inputs))
             )
     else:
+        is_streaming = False
         states = inputs
 
     def _prepare_inputs(packages):
@@ -187,15 +189,24 @@ def _client_stream(
             # TODO: we should do some check on whether we
             # have states or not here and use async_infer
             # instead if we're doing a "normal" inference
-            client.async_stream_infer(
-                model_name,
-                model_version=str(model_version),
-                inputs=infer_inputs,
-                request_id=str(request_id),
-                sequence_start=sequence_start,
-                sequence_id=sequence_id,
-                timeout=60,
-            )
+            if is_streaming:
+                client.async_stream_infer(
+                    model_name,
+                    model_version=str(model_version),
+                    inputs=infer_inputs,
+                    request_id=str(request_id),
+                    sequence_start=sequence_start,
+                    sequence_id=sequence_id,
+                    timeout=60,
+                )
+            else:
+                client.async_infer(
+                    model_name,
+                    model_version=str(model_version),
+                    inputs=infer_inputs,
+                    callback=callback,
+                    request_id=str(request_id),
+                )
 
             last_inference_time = time.time()
             sequence_start = False
@@ -381,7 +392,9 @@ class StreamingInferenceClient(StreamingInferenceProcess):
         self._metric_q.put(("start_time", gps_time()))
 
         with self.client as client:
-            client.start_stream(callback=self._callback)
+            if self.states is not None:
+                client.start_stream(callback=self._callback)
+
             for stream in self._streams:
                 stream.start()
 
@@ -394,13 +407,25 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             # have to sit around and wait for all the
             # responses to return, then put in the kill
             # message manually
-            client._stream._request_queue.queue.clear()
-            client._stream._request_queue.put(None)
+            if self.states is not None:
+                client._stream._request_queue.queue.clear()
+                client._stream._request_queue.put(None)
         logging.info("Client closed")
 
     def __enter__(self):
         self.start()
         return self
+
+    def __exit__(self, *exc_args):
+        self.stop()
+        self.join(10)
+        try:
+            self.close()
+        except ValueError:
+            logging.warn("Client couldn't close gracefully after 10 seconds")
+            self.terminiate()
+            time.sleep(1)
+            self.close()
 
     def monitor(
         self,
