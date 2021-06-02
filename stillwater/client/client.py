@@ -186,9 +186,6 @@ def _client_stream(
                     time.sleep(1e-6)
             request_id = callback.clock_start(sequence_id, t0)
 
-            # TODO: we should do some check on whether we
-            # have states or not here and use async_infer
-            # instead if we're doing a "normal" inference
             if is_streaming:
                 client.async_stream_infer(
                     model_name,
@@ -213,15 +210,17 @@ def _client_stream(
     except Exception as e:
         callback(None, e)
     finally:
-        client.async_stream_infer(
-            model_name,
-            model_version=str(model_version),
-            inputs=infer_inputs,
-            request_id=str(request_id),
-            sequence_start=sequence_start,
-            sequence_end=True,
-            timeout=60,
-        )
+        if is_streaming:
+            client.async_stream_infer(
+                model_name,
+                model_version=str(model_version),
+                inputs=infer_inputs,
+                request_id=str(request_id),
+                sequence_start=sequence_start,
+                sequence_end=True,
+                sequence_id=sequence_id,
+                timeout=60,
+            )
 
 
 class StreamingInferenceClient(StreamingInferenceProcess):
