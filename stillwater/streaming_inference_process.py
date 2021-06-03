@@ -1,5 +1,6 @@
 import queue
 import sys
+import time
 import typing
 from multiprocessing import Event, JoinableQueue, Pipe, Process, Queue
 
@@ -155,6 +156,25 @@ class StreamingInferenceProcess(Process):
 
     def reset(self):
         self.clear()
+
+    def try_elegant_stop(self, timeout: float = 10.) -> bool:
+        self.stop()
+        self.join(timeout)
+        try:
+            self.close()
+            return True
+        except ValueError:
+            self.terminate()
+            time.sleep(1)
+            self.close()
+            return False
+
+    def __enter__(self) -> "StreamingInferenceProcess":
+        self.start()
+        return self
+
+    def __exit__(self, *exc_args):
+        self.try_elegant_stop()
 
     def _break_glass(self, exception: Exception) -> None:
         """
