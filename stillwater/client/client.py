@@ -411,21 +411,6 @@ class StreamingInferenceClient(StreamingInferenceProcess):
                 client._stream._request_queue.put(None)
         logging.info("Client closed")
 
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, *exc_args):
-        self.stop()
-        self.join(10)
-        try:
-            self.close()
-        except ValueError:
-            logging.warn("Client couldn't close gracefully after 10 seconds")
-            self.terminiate()
-            time.sleep(1)
-            self.close()
-
     def monitor(
         self,
         pipes: typing.Optional[typing.Dict[str, "Connection"]] = None,
