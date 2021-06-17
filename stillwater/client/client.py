@@ -65,6 +65,10 @@ class _Callback:
 
         return sequence_id, message_t0
 
+    def wait(self):
+        while len(self.message_start_times) > 0:
+            time.sleep(1e-3)
+
     def __call__(self, result, error):
         # raise the error if anything went wrong
         if error is not None:
@@ -164,11 +168,10 @@ def _client_stream(
         t0 /= len(packages)
         return infer_inputs, t0
 
+    sequence_start = True
+    data_iter = iter(data_source)
+    last_inference_time = time.time()
     try:
-        sequence_start = True
-        data_iter = iter(data_source)
-
-        last_inference_time = time.time()
         packages = next(data_iter)
         while not stop_event.is_set():
             infer_inputs, t0 = _prepare_inputs(packages)
@@ -207,10 +210,14 @@ def _client_stream(
 
             last_inference_time = time.time()
             sequence_start = False
-    except Exception as e:
-        callback(None, e)
-    finally:
-        if is_streaming:
+    except StopIteration:
+        # this is the only way out of the loop above
+        if not sequence_start and is_streaming:
+            # if we're streaming and the stream has been
+            # started then make sure to send a request
+            # indicating that it's ended
+            infer_inputs, t0 = _prepare_inputs(packages)
+            request_id = callback.clock_start(sequence_id, t0)
             client.async_stream_infer(
                 model_name,
                 model_version=str(model_version),
@@ -221,6 +228,18 @@ def _client_stream(
                 sequence_id=sequence_id,
                 timeout=60,
             )
+
+        callback.wait()
+        raise
+    except Exception:
+        # clear the request queue so that we don't have
+        # have to sit around and wait for all the
+        # responses to return, then put in the kill
+        # message manually
+        if is_streaming:
+            client._stream._request_queue.queue.clear()
+            client._stream._request_queue.put(None)
+        raise
 
 
 class StreamingInferenceClient(StreamingInferenceProcess):
@@ -401,30 +420,7 @@ class StreamingInferenceClient(StreamingInferenceProcess):
             # signal, we can just use them to block
             for stream in self._streams:
                 stream.join()
-
-            # clear the request queue so that we don't have
-            # have to sit around and wait for all the
-            # responses to return, then put in the kill
-            # message manually
-            if self.states is not None:
-                client._stream._request_queue.queue.clear()
-                client._stream._request_queue.put(None)
         logging.info("Client closed")
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, *exc_args):
-        self.stop()
-        self.join(10)
-        try:
-            self.close()
-        except ValueError:
-            logging.warn("Client couldn't close gracefully after 10 seconds")
-            self.terminiate()
-            time.sleep(1)
-            self.close()
 
     def monitor(
         self,
